@@ -1,0 +1,970 @@
+
+'use strict';
+
+/* ==== FIREBASE CONFIG — paste your project's config here ==== */
+const firebaseConfig = {
+  apiKey: "AIzaSyAGTqdGSE3PBUXZ7h7NLCGgwUC3lQ6_jbg",
+  authDomain: "shooter-game-c588b.firebaseapp.com",
+  databaseURL: "https://shooter-game-c588b-default-rtdb.firebaseio.com",
+  projectId: "shooter-game-c588b",
+  storageBucket: "shooter-game-c588b.firebasestorage.app",
+  messagingSenderId: "100183876503",
+  appId: "1:100183876503:web:5380f905ac45456a141ad2",
+  measurementId: "G-GWQ1SJMKTF"
+};
+
+let db = null, fbReady = false, authReady = null;
+function isFirebaseConfigured() {
+  return !!firebaseConfig.apiKey && !firebaseConfig.apiKey.includes('PASTE');
+}
+function initFirebase() {
+  if (fbReady) return true;
+  if (!isFirebaseConfigured() || typeof firebase === 'undefined') return false;
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.database();
+    // Secure RTDB rules require auth != null, so sign in anonymously.
+    // Auth resolves asynchronously; fbReady stays true so the game keeps flowing.
+    authReady = firebase.auth().signInAnonymously().catch(e => { throw e; });
+    fbReady = true;
+  }
+  catch (e) { fbReady = false; }
+  return fbReady;
+}
+// Resolves once an authenticated (anonymous) user is available.
+function ensureAuth() {
+  if (typeof firebase !== 'undefined' && firebase.auth && firebase.auth().currentUser) {
+    return Promise.resolve();
+  }
+  if (authReady) return authReady;
+  return Promise.reject(new Error('auth not initialized'));
+}
+
+/* ================= CONFIG ================= */
+const FIELD_W = 1600, FIELD_H = 900;          // logical field size (landscape)
+const GOAL_H = 280, GOAL_DEPTH = 60;
+const CAR_R = 26, BALL_R = 34;
+const CAR_ACCEL = 900, CAR_MAXSPD = 460, BOOST_ACCEL = 1400, BOOST_MAXSPD = 760;
+const CAR_TURN = 3.6;                          // rad/s at full stick
+const FRICTION = 1.6, BALL_FRICTION = 0.45, WALL_BOUNCE = 0.72, BALL_WALL_BOUNCE = 0.86;
+const BOOST_MAX = 100, BOOST_DRAIN = 38, BOOST_REGEN = 14;
+const ROUNDS_TO_WIN = 4;                        // best of 7
+const ROUND_TIME = 60;                          // seconds per round (soft replay timer)
+const TICK = 1 / 60;
+
+/* ================= STATE ================= */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, scale = 1, offX = 0, offY = 0, DPR = 1;
+
+const state = {
+  mode: null,               // 'online' | 'offline'
+  running: false,
+  isHost: true,             // authoritative for ball/rounds
+  myIdx: 0,                 // 0 = blue (left), 1 = orange (right)
+  roundWins: [0, 0],        // best-of-7 tally
+  roundNum: 1,
+  roundTimeLeft: ROUND_TIME,
+  countdown: 0,             // kickoff freeze
+  goalFlash: 0, goalText: '',
+  roundResult: 0, roundResultText: '',
+  over: false, overText: '',
+  localRematchReady: false, peerRematchReady: false,
+  cars: [mkCar(0), mkCar(1)],
+  ball: { x: FIELD_W/2, y: FIELD_H/2, vx: 0, vy: 0 },
+  particles: [],
+};
+
+function mkCar(idx) {
+  return { x: 0, y: 0, vx: 0, vy: 0, ang: 0, boost: BOOST_MAX, boosting: false, idx };
+}
+function resetKickoff() {
+  const b = state.ball; b.x = FIELD_W/2; b.y = FIELD_H/2; b.vx = 0; b.vy = 0;
+  for (const c of state.cars) {
+    c.x = c.idx === 0 ? FIELD_W*0.22 : FIELD_W*0.78;
+    c.y = FIELD_H/2; c.vx = 0; c.vy = 0;
+    c.ang = c.idx === 0 ? 0 : Math.PI;
+    c.boost = Math.max(c.boost, 40);
+  }
+  state.countdown = 3;
+}
+
+/* ================= INPUT (touch joystick + boost) ================= */
+const input = { x: 0, y: 0, boost: false };
+const joy = { active: false, id: -1, cx: 0, cy: 0, x: 0, y: 0, r: 70 };
+const boostBtn = { id: -1, pressed: false };
+
+function boostRect() { return { x: W - 150, y: H - 150, r: 62 }; }
+
+function handleTouch(e) {
+  e.preventDefault();
+  if (!state.running) return;
+  for (const t of e.changedTouches) {
+    const x = t.clientX, y = t.clientY;
+    if (e.type === 'touchstart') {
+      const bb = boostRect();
+      if (Math.hypot(x - bb.x, y - bb.y) < bb.r + 22 && boostBtn.id === -1) {
+        boostBtn.id = t.identifier; boostBtn.pressed = true;
+      } else if (x < W * 0.5 && !joy.active) {
+        joy.active = true; joy.id = t.identifier; joy.cx = x; joy.cy = y; joy.x = x; joy.y = y;
+      }
+    } else if (e.type === 'touchmove') {
+      if (t.identifier === joy.id) { joy.x = x; joy.y = y; }
+    } else { // end / cancel
+      if (t.identifier === joy.id) { joy.active = false; joy.id = -1; }
+      if (t.identifier === boostBtn.id) { boostBtn.id = -1; boostBtn.pressed = false; }
+    }
+  }
+  if (joy.active) {
+    let dx = joy.x - joy.cx, dy = joy.y - joy.cy;
+    const d = Math.hypot(dx, dy);
+    if (d > joy.r) { dx = dx / d * joy.r; dy = dy / d * joy.r; }
+    input.x = dx / joy.r; input.y = dy / joy.r;
+  } else { input.x = 0; input.y = 0; }
+  input.boost = boostBtn.pressed;
+}
+for (const ev of ['touchstart','touchmove','touchend','touchcancel'])
+  canvas.addEventListener(ev, handleTouch, { passive: false });
+
+// keyboard fallback for desktop testing
+const keys = {};
+addEventListener('keydown', e => keys[e.key] = true);
+addEventListener('keyup', e => keys[e.key] = false);
+function pollKeys() {
+  if (joy.active) return;
+  let x = 0, y = 0;
+  if (keys.ArrowLeft || keys.a) x -= 1;
+  if (keys.ArrowRight || keys.d) x += 1;
+  if (keys.ArrowUp || keys.w) y -= 1;
+  if (keys.ArrowDown || keys.s) y += 1;
+  if (x || y || !('ontouchstart' in window)) { input.x = x; input.y = y; }
+  if (keys[' '] !== undefined && !boostBtn.pressed) input.boost = !!keys[' '];
+}
+
+/* ================= PHYSICS ================= */
+function stepCar(c, inp, dt) {
+  const mag = Math.min(1, Math.hypot(inp.x, inp.y));
+  if (mag > 0.12) {
+    const target = Math.atan2(inp.y, inp.x);
+    let da = target - c.ang;
+    while (da > Math.PI) da -= 2*Math.PI;
+    while (da < -Math.PI) da += 2*Math.PI;
+    const maxTurn = CAR_TURN * dt * (0.5 + 0.5*mag);
+    c.ang += Math.max(-maxTurn, Math.min(maxTurn, da));
+    const boosting = inp.boost && c.boost > 0;
+    c.boosting = boosting;
+    const acc = boosting ? BOOST_ACCEL : CAR_ACCEL * mag;
+    c.vx += Math.cos(c.ang) * acc * dt;
+    c.vy += Math.sin(c.ang) * acc * dt;
+    if (boosting) {
+      c.boost = Math.max(0, c.boost - BOOST_DRAIN * dt);
+      spawnFlame(c);
+    }
+  } else {
+    c.boosting = inp.boost && c.boost > 0;
+    if (c.boosting) {
+      c.vx += Math.cos(c.ang) * BOOST_ACCEL * dt;
+      c.vy += Math.sin(c.ang) * BOOST_ACCEL * dt;
+      c.boost = Math.max(0, c.boost - BOOST_DRAIN * dt);
+      spawnFlame(c);
+    }
+  }
+  if (!c.boosting) c.boost = Math.min(BOOST_MAX, c.boost + BOOST_REGEN * dt);
+  // friction + speed cap
+  const f = Math.exp(-FRICTION * dt);
+  c.vx *= f; c.vy *= f;
+  const spd = Math.hypot(c.vx, c.vy);
+  const cap = c.boosting ? BOOST_MAXSPD : CAR_MAXSPD;
+  if (spd > cap) { c.vx *= cap/spd; c.vy *= cap/spd; }
+  c.x += c.vx * dt; c.y += c.vy * dt;
+  // walls
+  if (c.x < CAR_R) { c.x = CAR_R; c.vx = Math.abs(c.vx) * WALL_BOUNCE; }
+  if (c.x > FIELD_W - CAR_R) { c.x = FIELD_W - CAR_R; c.vx = -Math.abs(c.vx) * WALL_BOUNCE; }
+  if (c.y < CAR_R) { c.y = CAR_R; c.vy = Math.abs(c.vy) * WALL_BOUNCE; }
+  if (c.y > FIELD_H - CAR_R) { c.y = FIELD_H - CAR_R; c.vy = -Math.abs(c.vy) * WALL_BOUNCE; }
+}
+
+function stepBall(dt) {
+  const b = state.ball;
+  const f = Math.exp(-BALL_FRICTION * dt);
+  b.vx *= f; b.vy *= f;
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  const gTop = (FIELD_H - GOAL_H)/2, gBot = (FIELD_H + GOAL_H)/2;
+  const inGoalMouth = b.y > gTop + BALL_R*0.3 && b.y < gBot - BALL_R*0.3;
+  // side walls (with goal openings)
+  if (b.x < BALL_R) {
+    if (inGoalMouth) { if (b.x < -BALL_R*0.6) return 1; }  // orange scores on left goal
+    else { b.x = BALL_R; b.vx = Math.abs(b.vx) * BALL_WALL_BOUNCE; }
+  }
+  if (b.x > FIELD_W - BALL_R) {
+    if (inGoalMouth) { if (b.x > FIELD_W + BALL_R*0.6) return 0; } // blue scores on right goal
+    else { b.x = FIELD_W - BALL_R; b.vx = -Math.abs(b.vx) * BALL_WALL_BOUNCE; }
+  }
+  if (b.y < BALL_R) { b.y = BALL_R; b.vy = Math.abs(b.vy) * BALL_WALL_BOUNCE; }
+  if (b.y > FIELD_H - BALL_R) { b.y = FIELD_H - BALL_R; b.vy = -Math.abs(b.vy) * BALL_WALL_BOUNCE; }
+  return -1;
+}
+
+function collideCarBall(c) {
+  const b = state.ball;
+  const dx = b.x - c.x, dy = b.y - c.y;
+  const d = Math.hypot(dx, dy), min = CAR_R + BALL_R;
+  if (d < min && d > 0.001) {
+    const nx = dx/d, ny = dy/d;
+    b.x = c.x + nx*min; b.y = c.y + ny*min;
+    const rvx = b.vx - c.vx, rvy = b.vy - c.vy;
+    const vn = rvx*nx + rvy*ny;
+    if (vn < 0) {
+      const impulse = -vn * 1.55 + 60;
+      b.vx += nx * impulse; b.vy += ny * impulse;
+      hitSound(Math.min(1, Math.abs(vn)/500));
+      for (let i = 0; i < 6; i++) spawnSpark(b.x - nx*BALL_R, b.y - ny*BALL_R);
+    }
+  }
+}
+
+function collideCars(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const d = Math.hypot(dx, dy), min = CAR_R*2;
+  if (d < min && d > 0.001) {
+    const nx = dx/d, ny = dy/d, push = (min-d)/2;
+    a.x -= nx*push; a.y -= ny*push; b.x += nx*push; b.y += ny*push;
+    const vn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
+    if (vn < 0) { const j = -vn*0.8; a.vx -= nx*j; a.vy -= ny*j; b.vx += nx*j; b.vy += ny*j; }
+  }
+}
+
+/* ================= BOT AI (offline mode) ================= */
+function botInput(c) {
+  const b = state.ball;
+  const ownGoalX = c.idx === 0 ? 0 : FIELD_W;
+  const enemyGoalX = FIELD_W - ownGoalX;
+  // aim point: behind the ball relative to enemy goal
+  const gdx = enemyGoalX - b.x, gdy = FIELD_H/2 - b.y;
+  const gd = Math.hypot(gdx, gdy) || 1;
+  let tx = b.x - gdx/gd * (BALL_R + CAR_R + 8);
+  let ty = b.y - gdy/gd * (BALL_R + CAR_R + 8);
+  // if ball is between bot and own goal, retreat first
+  const behindBall = Math.abs(c.x - ownGoalX) < Math.abs(b.x - ownGoalX);
+  if (!behindBall) { tx = b.x; ty = b.y; }
+  else if (Math.hypot(tx - c.x, ty - c.y) > 260 && Math.abs(b.y - c.y) > 140) {
+    ty = b.y; // swing around
+  }
+  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy) || 1;
+  return { x: dx/d, y: dy/d, boost: d > 300 && c.boost > 25 };
+}
+
+/* ================= NETWORKING ================= */
+let remoteInput = { x: 0, y: 0, boost: false };   // host: guest's input
+let netInterp = null;                              // guest: latest snapshot
+
+// Convenience: RTDB roomRef used by netTick guards below.
+let roomRef = null;
+
+/* ---- Net module: Firebase RTDB matchmaking + relay ---- */
+const Net = (function () {
+  const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let myRole = null;          // 'host' | 'guest'
+  let code = null;
+  const listeners = [];       // { ref, event, cb }
+  const disconnects = [];     // onDisconnect() objects to cancel on leave
+  let quickRef = null;        // reference to the `quick` node (quick-host self-clean)
+  let started = false;        // whether startMatch has been triggered
+  let guestPresenceWatched = false;
+
+  function makeCode() {
+    let s = '';
+    for (let i = 0; i < 5; i++) s += CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)];
+    return s;
+  }
+
+  function on(ref, event, cb) {
+    ref.on(event, cb);
+    listeners.push({ ref, event, cb });
+  }
+
+  function TS() { return firebase.database.ServerValue.TIMESTAMP; }
+
+  // --- shared host runtime: attach listeners + wait for guest, then start ---
+  function beginHostWatch() {
+    // guest join -> start
+    const guestRef = roomRef.child('players/guest');
+    on(guestRef, 'value', snap => {
+      const v = snap.val();
+      if (v && !started) {
+        started = true;
+        state.isHost = true; state.myIdx = 0;
+        // input relay from guest
+        on(roomRef.child('input'), 'value', s2 => {
+          const val = s2.val();
+          if (val) remoteInput = { x: val.x || 0, y: val.y || 0, boost: !!val.boost };
+        });
+        // guest rematch flag
+        on(roomRef.child('rematch/guest'), 'value', s3 => { state.peerRematchReady = !!s3.val(); });
+        guestPresenceWatched = true;
+        startMatch('online');
+      } else if (guestPresenceWatched && v == null && started) {
+        // guest left after match started
+        handleDisconnect('Opponent left');
+      }
+    });
+  }
+
+  // --- shared guest runtime: claim guest slot + attach listeners, then start ---
+  // opts.retries: how many extra times to re-read the room if it doesn't exist yet.
+  // The quick-match guest passes retries>0 because the quick-host creates the room
+  // asynchronously and it may not exist at the instant we first read. A normal
+  // JOIN-by-code passes retries:0 so a wrong code fails fast with "Room not found".
+  function beginGuestJoin(joinCode, opts) {
+    opts = opts || {};
+    let retriesLeft = opts.retries || 0;
+    joinCode = String(joinCode || '').trim().toUpperCase();
+    roomRef = db.ref('rooms/' + joinCode);
+    code = joinCode;
+    myRole = 'guest';
+
+    const attemptRead = () => {
+      roomRef.once('value').then(snap => {
+        if (!snap.exists()) {
+          if (retriesLeft > 0) { retriesLeft--; setTimeout(attemptRead, 250); return; }
+          setStatus('Room not found'); Net.leave(); showMenuButtons(); return;
+        }
+        const val = snap.val();
+        if (val.players && val.players.guest) { setStatus('Room is full'); Net.leave(); showMenuButtons(); return; }
+        // claim guest slot (create only if null)
+        roomRef.child('players/guest').transaction(cur => {
+          if (cur === null) return true;
+          return; // abort -> taken
+        }, (err, committed) => {
+          if (err || !committed) { setStatus('Room is full'); Net.leave(); showMenuButtons(); return; }
+          const od = roomRef.child('players/guest').onDisconnect(); od.remove(); disconnects.push(od);
+          state.isHost = false; state.myIdx = 1;
+          // world snapshots from host
+          on(roomRef.child('snap'), 'value', s2 => { const d = s2.val(); if (d) netInterp = d; });
+          // host presence -> detect host leaving
+          on(roomRef.child('players/host'), 'value', s3 => {
+            if (started && s3.val() == null) handleDisconnect('Opponent left');
+          });
+          // host rematch flag
+          on(roomRef.child('rematch/host'), 'value', s4 => { state.peerRematchReady = !!s4.val(); });
+          started = true;
+          startMatch('online');
+        });
+      }).catch(() => { setStatus('Connection failed — try VS BOT'); Net.leave(); showMenuButtons(); });
+    };
+
+    attemptRead();
+  }
+
+  // --- create a room under a specific code, then run host watch ---
+  function createRoomAndHost(useCode, onReady) {
+    code = useCode;
+    myRole = 'host';
+    roomRef = db.ref('rooms/' + useCode);
+    roomRef.child('players/host').set(true).then(() => roomRef.child('createdAt').set(TS()))
+      .then(() => {
+        const od1 = roomRef.child('players/host').onDisconnect(); od1.remove(); disconnects.push(od1);
+        const od2 = roomRef.onDisconnect(); od2.remove(); disconnects.push(od2);
+        beginHostWatch();
+        if (onReady) onReady();
+      }).catch(() => { setStatus('Connection failed — try VS BOT'); Net.leave(); showMenuButtons(); });
+  }
+
+  return {
+    get roomRef() { return roomRef; },
+    get myRole() { return myRole; },
+    get code() { return code; },
+
+    host() {
+      if (!initFirebase()) { onlineNotSetUp(); return; }
+      ensureAuth().then(() => {
+      setStatus('');
+      let tries = 0;
+      const tryClaim = () => {
+        const c = makeCode();
+        const ref = db.ref('rooms/' + c);
+        ref.transaction(cur => {
+          // Only claim the room here. ServerValue.TIMESTAMP is unreliable inside a
+          // transaction update fn (it may run multiple times locally), so createdAt
+          // is written separately after the transaction commits.
+          if (cur === null) return { players: { host: true } };
+          return; // collision -> abort
+        }, (err, committed) => {
+          if (err) { setStatus('Connection failed — try VS BOT'); showMenuButtons(); return; }
+          if (!committed) {
+            if (++tries < 5) { tryClaim(); return; }
+            setStatus('Connection failed — try VS BOT'); showMenuButtons(); return;
+          }
+          code = c; myRole = 'host'; roomRef = ref;
+          ref.child('createdAt').set(TS()); // write server timestamp after commit
+          const od1 = roomRef.child('players/host').onDisconnect(); od1.remove(); disconnects.push(od1);
+          const od2 = roomRef.onDisconnect(); od2.remove(); disconnects.push(od2);
+          showWaiting('host', c);
+          beginHostWatch();
+        });
+      };
+      tryClaim();
+      }).catch(() => { setStatus('Online sign-in failed — check your connection'); showMenuButtons(); });
+    },
+
+    join(joinCode) {
+      if (!initFirebase()) { onlineNotSetUp(); return; }
+      ensureAuth().then(() => {
+      setStatus('Connecting…');
+      beginGuestJoin(joinCode, { retries: 0 }); // typed code -> fail fast if wrong
+      }).catch(() => { setStatus('Online sign-in failed — check your connection'); showMenuButtons(); });
+    },
+
+    quick() {
+      if (!initFirebase()) { onlineNotSetUp(); return; }
+      ensureAuth().then(() => {
+      showWaiting('quick');
+      let iBecameHost = false;
+      let myCode = null;
+      let pickedCode = null;
+      quickRef = db.ref('quick');
+      quickRef.transaction(cur => {
+        if (cur === null) {
+          iBecameHost = true;
+          myCode = makeCode();
+          return { code: myCode };
+        } else {
+          iBecameHost = false;
+          pickedCode = cur.code;
+          return null; // consume the waiting entry
+        }
+      }, (err, committed) => {
+        if (err || !committed) { setStatus('Connection failed — try VS BOT'); showMenuButtons(); return; }
+        if (iBecameHost) {
+          // self-clean the waiting entry if I drop before a guest arrives
+          const odq = quickRef.onDisconnect(); odq.remove(); disconnects.push(odq);
+          createRoomAndHost(myCode, () => { showWaiting('quick'); });
+        } else {
+          if (!pickedCode) { setStatus('Connection failed — try VS BOT'); showMenuButtons(); return; }
+          // quick-host creates its room asynchronously; tolerate a brief not-yet-exists window
+          beginGuestJoin(pickedCode, { retries: 10 }); // ~10 x 250ms = ~2.5s
+        }
+      });
+      }).catch(() => { setStatus('Online sign-in failed — check your connection'); showMenuButtons(); });
+    },
+
+    sendSnap(obj) { if (myRole === 'host' && roomRef) roomRef.child('snap').set(obj); },
+    sendInput(obj) { if (myRole === 'guest' && roomRef) roomRef.child('input').set(obj); },
+    sendRematch() { if (roomRef) roomRef.child('rematch/' + myRole).set(true); },
+    clearRematch() { if (myRole === 'host' && roomRef) roomRef.child('rematch').set({ host: false, guest: false }); },
+
+    leave() {
+      // detach listeners
+      for (const l of listeners) { try { l.ref.off(l.event, l.cb); } catch (e) {} }
+      listeners.length = 0;
+      // cancel onDisconnect handlers
+      for (const od of disconnects) { try { od.cancel(); } catch (e) {} }
+      disconnects.length = 0;
+      // cleanup room
+      try {
+        if (roomRef) {
+          if (myRole === 'host') roomRef.remove();
+          else if (myRole === 'guest') roomRef.child('players/guest').remove();
+        }
+      } catch (e) {}
+      roomRef = null; myRole = null; code = null; quickRef = null;
+      started = false; guestPresenceWatched = false;
+    }
+  };
+})();
+
+// Shown when an online button is pressed but Firebase isn't configured/available.
+function onlineNotSetUp() {
+  setStatus('Online not set up yet — add Firebase config (VS BOT works offline)');
+  showMenuButtons();
+}
+
+function netTick() {
+  if (state.mode !== 'online' || !roomRef) return;
+  if (state.isHost) {
+    const s = state;
+    Net.sendSnap({
+      cars: s.cars.map(c => [c.x|0, c.y|0, +c.ang.toFixed(2), c.boost|0, c.boosting?1:0, +c.vx.toFixed(1), +c.vy.toFixed(1)]),
+      ball: [s.ball.x|0, s.ball.y|0, +s.ball.vx.toFixed(1), +s.ball.vy.toFixed(1)],
+      roundWins: s.roundWins,
+      roundNum: s.roundNum,
+      roundResult: s.roundResult > 0 ? s.roundResultText : 0,
+      matchOver: s.over ? s.overText : 0,
+      cd: +s.countdown.toFixed(2),
+    });
+  } else {
+    Net.sendInput({ x: +input.x.toFixed(2), y: +input.y.toFixed(2), boost: input.boost });
+  }
+}
+
+function applySnapshot() {
+  if (!netInterp) return;
+  const d = netInterp;
+  d.cars.forEach((a, i) => {
+    const c = state.cars[i];
+    // smooth toward authoritative position
+    c.x += (a[0]-c.x)*0.35; c.y += (a[1]-c.y)*0.35; c.ang = a[2];
+    c.boost = a[3]; c.boosting = !!a[4]; c.vx = a[5]; c.vy = a[6];
+  });
+  const b = state.ball;
+  b.x += (d.ball[0]-b.x)*0.4; b.y += (d.ball[1]-b.y)*0.4; b.vx = d.ball[2]; b.vy = d.ball[3];
+  if (d.roundWins) state.roundWins = d.roundWins;
+  if (d.roundNum) state.roundNum = d.roundNum;
+  state.countdown = d.cd;
+  // round-result banner relayed from host
+  if (d.roundResult) { state.roundResultText = d.roundResult; state.roundResult = Math.max(state.roundResult, 0.5); }
+  // match over / rematch reset synced from host
+  if (d.matchOver) {
+    if (!state.over) endMatch(d.matchOver);
+  } else if (state.over) {
+    // host has reset for a rematch — follow along
+    state.over = false; state.overText = '';
+    state.localRematchReady = false; state.peerRematchReady = false;
+    hideOverlay();
+  }
+}
+
+/* ================= GAME LOOP ================= */
+let last = 0, netAcc = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  if (!state.running) return;
+  const dt = Math.min(0.05, (ts - last)/1000 || TICK); last = ts;
+  pollKeys();
+
+  if (!state.over) {
+    if (state.countdown > 0) {
+      state.countdown -= dt;
+    } else if (state.isHost || state.mode === 'offline') {
+      // per-round soft timer: on timeout, replay the round without awarding
+      state.roundTimeLeft -= dt;
+      if (state.roundTimeLeft <= 0) {
+        state.roundTimeLeft = ROUND_TIME;
+        resetKickoff();
+      }
+    }
+
+    const frozen = state.countdown > 0;
+    if (state.mode === 'offline') {
+      if (!frozen) {
+        stepCar(state.cars[0], input, dt);
+        stepCar(state.cars[1], botInput(state.cars[1]), dt);
+        physicsCommon(dt);
+      }
+    } else if (state.isHost) {
+      if (!frozen) {
+        stepCar(state.cars[0], input, dt);
+        stepCar(state.cars[1], remoteInput, dt);
+        physicsCommon(dt);
+      }
+    } else {
+      // guest: predict own car locally, snap everything to host
+      if (!frozen) stepCar(state.cars[1], input, dt);
+      applySnapshot();
+    }
+  } else if (state.mode === 'online' && !state.isHost) {
+    // guest keeps consuming snapshots so it can follow a host rematch reset
+    applySnapshot();
+  }
+
+  // host resolves an agreed rematch
+  if (state.over && state.mode === 'online' && state.isHost &&
+      state.localRematchReady && state.peerRematchReady) {
+    resetMatch();
+  }
+
+  netAcc += dt;
+  if (netAcc > 1/20) { netAcc = 0; netTick(); }
+
+  state.goalFlash = Math.max(0, state.goalFlash - dt);
+  state.roundResult = Math.max(0, state.roundResult - dt);
+  updateParticles(dt);
+  render();
+}
+
+function physicsCommon(dt) {
+  collideCars(state.cars[0], state.cars[1]);
+  collideCarBall(state.cars[0]);
+  collideCarBall(state.cars[1]);
+  const scorer = stepBall(dt);
+  if (scorer >= 0) {
+    state.roundWins[scorer]++;
+    state.goalFlash = 1.6;
+    state.goalText = scorer === 0 ? 'BLUE SCORES!' : 'ORANGE SCORES!';
+    goalSound();
+    explode(state.ball.x, state.ball.y, scorer === 0 ? '#4da3ff' : '#ffa030');
+    state.roundResultText = scorer === 0 ? 'BLUE WINS ROUND!' : 'ORANGE WINS ROUND!';
+    state.roundResult = 1.6;
+    if (state.roundWins[scorer] >= ROUNDS_TO_WIN) {
+      // match decided
+      const won = (state.mode === 'offline') ? (scorer === 0) : (scorer === state.myIdx);
+      endMatch(won ? 'YOU WIN! 🏆' : 'YOU LOSE');
+    } else {
+      // advance to next round
+      state.roundNum++;
+      resetKickoff();
+      state.roundTimeLeft = ROUND_TIME;
+    }
+  }
+}
+
+function endMatch(text) {
+  state.over = true; state.overText = text;
+  // let the win banner show briefly, then reveal rematch/menu choices
+  setTimeout(() => {
+    if (state.over) {
+      maybeShowInterstitial();   // match-end only (not per round), frequency-capped
+      showOverlay();
+    }
+  }, 1400);
+}
+
+// host (or offline) resets everything for another match
+function resetMatch() {
+  state.roundWins = [0, 0]; state.roundNum = 1; state.roundTimeLeft = ROUND_TIME;
+  state.over = false; state.overText = ''; state.goalFlash = 0;
+  state.roundResult = 0; state.roundResultText = '';
+  state.localRematchReady = false; state.peerRematchReady = false;
+  state.particles.length = 0;
+  // online host: wipe the rematch flags so the next handshake starts fresh
+  if (state.mode === 'online' && state.isHost) Net.clearRematch();
+  resetKickoff();
+  hideOverlay();
+  state.running = true; last = performance.now();
+}
+
+/* ================= PARTICLES & SOUND ================= */
+function spawnFlame(c) {
+  if (Math.random() < 0.6) state.particles.push({
+    x: c.x - Math.cos(c.ang)*CAR_R, y: c.y - Math.sin(c.ang)*CAR_R,
+    vx: -Math.cos(c.ang)*120 + (Math.random()-.5)*60, vy: -Math.sin(c.ang)*120 + (Math.random()-.5)*60,
+    life: 0.35, max: 0.35, col: '#ffb020', r: 7,
+  });
+}
+function spawnSpark(x, y) {
+  state.particles.push({ x, y, vx: (Math.random()-.5)*300, vy: (Math.random()-.5)*300, life: .3, max: .3, col: '#ffffff', r: 3 });
+}
+function explode(x, y, col) {
+  for (let i = 0; i < 40; i++) {
+    const a = Math.random()*Math.PI*2, s = 120 + Math.random()*380;
+    state.particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, life: .9, max: .9, col, r: 5 });
+  }
+}
+function updateParticles(dt) {
+  const p = state.particles;
+  for (let i = p.length-1; i >= 0; i--) {
+    const q = p[i]; q.life -= dt;
+    if (q.life <= 0) { p.splice(i, 1); continue; }
+    q.x += q.vx*dt; q.y += q.vy*dt;
+  }
+}
+
+let audioCtx = null;
+function initAudio() { if (!audioCtx) try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} }
+function beep(freq, dur, vol, type) {
+  if (!audioCtx) return;
+  const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+  o.type = type || 'square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+  o.connect(g); g.connect(audioCtx.destination);
+  o.start(); o.stop(audioCtx.currentTime + dur);
+}
+function hitSound(v) { beep(160 + v*240, 0.09, 0.12*v + 0.03, 'triangle'); }
+function goalSound() { beep(440, .12, .15); setTimeout(() => beep(660, .12, .15), 120); setTimeout(() => beep(880, .25, .15), 240); }
+
+/* ================= RENDER ================= */
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  scale = Math.min(W / FIELD_W, H / FIELD_H);
+  offX = (W - FIELD_W*scale)/2; offY = (H - FIELD_H*scale)/2;
+  document.body.classList.toggle('portrait', H > W);
+}
+addEventListener('resize', resize);
+resize();
+
+function fx(x) { return offX + x*scale; }
+function fy(y) { return offY + y*scale; }
+
+function render() {
+  ctx.fillStyle = '#0a0e1a'; ctx.fillRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(offX, offY); ctx.scale(scale, scale);
+
+  // field
+  const grad = ctx.createLinearGradient(0, 0, 0, FIELD_H);
+  grad.addColorStop(0, '#0d3320'); grad.addColorStop(.5, '#124528'); grad.addColorStop(1, '#0d3320');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, FIELD_W, FIELD_H);
+  // stripes
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  for (let i = 0; i < 8; i += 2) ctx.fillRect(i*FIELD_W/8, 0, FIELD_W/8, FIELD_H);
+  // lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 4;
+  ctx.strokeRect(6, 6, FIELD_W-12, FIELD_H-12);
+  ctx.beginPath(); ctx.moveTo(FIELD_W/2, 0); ctx.lineTo(FIELD_W/2, FIELD_H); ctx.stroke();
+  ctx.beginPath(); ctx.arc(FIELD_W/2, FIELD_H/2, 130, 0, Math.PI*2); ctx.stroke();
+  // goals
+  const gTop = (FIELD_H - GOAL_H)/2;
+  ctx.fillStyle = 'rgba(77,163,255,0.25)'; ctx.fillRect(-GOAL_DEPTH+4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.fillStyle = 'rgba(255,160,48,0.25)'; ctx.fillRect(FIELD_W-4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.strokeStyle = '#4da3ff'; ctx.strokeRect(-GOAL_DEPTH+4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.strokeStyle = '#ffa030'; ctx.strokeRect(FIELD_W-4, gTop, GOAL_DEPTH, GOAL_H);
+
+  // particles
+  for (const p of state.particles) {
+    ctx.globalAlpha = p.life / p.max;
+    ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // ball
+  const b = state.ball;
+  ctx.save();
+  ctx.shadowColor = '#fff'; ctx.shadowBlur = 18;
+  ctx.fillStyle = '#f2f2f2';
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
+  ctx.strokeStyle = '#999'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R*0.55, 0.4, 2.6); ctx.stroke();
+
+  // cars
+  for (const c of state.cars) drawCar(c);
+
+  ctx.restore();
+
+  drawHUD();
+}
+
+function drawCar(c) {
+  const col = c.idx === 0 ? '#3a8dff' : '#ff8a1e';
+  const dark = c.idx === 0 ? '#1d4f9e' : '#a34f00';
+  ctx.save();
+  ctx.translate(c.x, c.y); ctx.rotate(c.ang);
+  if (c.boosting) { ctx.shadowColor = '#ffb020'; ctx.shadowBlur = 24; }
+  // body
+  ctx.fillStyle = col;
+  roundRect(-CAR_R, -CAR_R*0.72, CAR_R*2, CAR_R*1.44, 9); ctx.fill();
+  ctx.shadowBlur = 0;
+  // cabin
+  ctx.fillStyle = dark;
+  roundRect(-CAR_R*0.35, -CAR_R*0.5, CAR_R*0.9, CAR_R, 6); ctx.fill();
+  // nose
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(CAR_R*0.6, -CAR_R*0.5, CAR_R*0.3, CAR_R);
+  // wheels
+  ctx.fillStyle = '#111';
+  ctx.fillRect(-CAR_R*0.8, -CAR_R*0.95, CAR_R*0.6, CAR_R*0.28);
+  ctx.fillRect(-CAR_R*0.8,  CAR_R*0.67, CAR_R*0.6, CAR_R*0.28);
+  ctx.fillRect( CAR_R*0.25, -CAR_R*0.95, CAR_R*0.6, CAR_R*0.28);
+  ctx.fillRect( CAR_R*0.25,  CAR_R*0.67, CAR_R*0.6, CAR_R*0.28);
+  ctx.restore();
+  // "YOU" marker
+  const myCar = (state.mode === 'offline') ? 0 : state.myIdx;
+  if (c.idx === myCar) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.beginPath();
+    ctx.moveTo(c.x, c.y - CAR_R - 26); ctx.lineTo(c.x - 9, c.y - CAR_R - 40); ctx.lineTo(c.x + 9, c.y - CAR_R - 40);
+    ctx.fill();
+  }
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x+r, y);
+  ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r);
+  ctx.closePath();
+}
+
+function drawHUD() {
+  // scoreboard: round-win tally + round number
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  const cw = 260;
+  roundRectPx((W-cw)/2, 8, cw, 64, 12); ctx.fill();
+  ctx.font = '700 34px Segoe UI, sans-serif';
+  ctx.fillStyle = '#4da3ff'; ctx.fillText(state.roundWins[0], W/2 - 72, 30);
+  ctx.fillStyle = '#ffa030'; ctx.fillText(state.roundWins[1], W/2 + 72, 30);
+  ctx.fillStyle = '#fff'; ctx.font = '700 24px Segoe UI, sans-serif';
+  ctx.fillText('–', W/2, 28);
+  ctx.fillStyle = '#cfd8ff'; ctx.font = '600 15px Segoe UI, sans-serif';
+  ctx.fillText('ROUND ' + state.roundNum + ' / 7', W/2, 56);
+
+  // boost gauge
+  const myCar = state.cars[state.mode === 'offline' ? 0 : state.myIdx];
+  const bb = boostRect();
+  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI*2);
+  ctx.fillStyle = boostBtn.pressed ? 'rgba(255,140,0,0.55)' : 'rgba(255,140,0,0.28)'; ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI*2); ctx.stroke();
+  ctx.strokeStyle = '#ffd000';
+  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, -Math.PI/2, -Math.PI/2 + Math.PI*2*(myCar.boost/BOOST_MAX)); ctx.stroke();
+  ctx.fillStyle = '#fff'; ctx.font = '700 18px Segoe UI, sans-serif';
+  ctx.fillText('BOOST', bb.x, bb.y);
+
+  // joystick
+  if (joy.active) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(joy.cx, joy.cy, joy.r, 0, Math.PI*2); ctx.stroke();
+    const dx = joy.x-joy.cx, dy = joy.y-joy.cy, d = Math.hypot(dx,dy)||1, cl = Math.min(d, joy.r);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath(); ctx.arc(joy.cx + dx/d*cl, joy.cy + dy/d*cl, 32, 0, Math.PI*2); ctx.fill();
+  } else if (state.running && !state.over) {
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.font = '600 15px Segoe UI, sans-serif';
+    ctx.fillText('◉ drag left side to steer', W*0.22, H - 40);
+  }
+
+  // countdown / goal / round result / game over
+  if (state.countdown > 0 && !state.over) {
+    ctx.fillStyle = '#fff'; ctx.font = '800 90px Segoe UI, sans-serif';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 14;
+    ctx.fillText(Math.ceil(state.countdown), W/2, H/2 - 60);
+    ctx.shadowBlur = 0;
+  }
+  if (state.goalFlash > 0 && !state.over) {
+    ctx.globalAlpha = Math.min(1, state.goalFlash);
+    ctx.fillStyle = '#ffd000'; ctx.font = '800 64px Segoe UI, sans-serif';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 12;
+    ctx.fillText(state.goalText, W/2, H*0.30);
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+  if (state.roundResult > 0 && !state.over) {
+    ctx.globalAlpha = Math.min(1, state.roundResult);
+    ctx.fillStyle = '#fff'; ctx.font = '800 46px Segoe UI, sans-serif';
+    ctx.shadowColor = '#000'; ctx.shadowBlur = 12;
+    ctx.fillText(state.roundResultText, W/2, H*0.46);
+    ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+  if (state.over) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#fff'; ctx.font = '800 58px Segoe UI, sans-serif';
+    ctx.fillText(state.overText, W/2, H/2 - 70);
+    ctx.font = '600 26px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd000';
+    ctx.fillText(state.roundWins[0] + '  –  ' + state.roundWins[1], W/2, H/2 - 24);
+  }
+}
+function roundRectPx(x, y, w, h, r) { roundRect(x, y, w, h, r); }
+
+/* ================= MENU / FLOW ================= */
+const menu = document.getElementById('menu');
+
+/* ================= ADS (native WebView bridge) ================= */
+// Native Android (WebView) should expose window.AndroidAds with:
+//   showInterstitial()   -> shows a full-screen interstitial
+//   (optional later) showRewarded(callbackName) -> for rewarded ads
+// The game calls these; if the bridge is absent the game runs normally.
+const AD_EVERY_N_MATCHES = 2;      // show at most once per this many finished matches
+const AD_MIN_GAP_MS = 60000;       // and never more often than this (ms)
+let matchesSinceAd = 0;
+let lastAdTime = 0;
+function maybeShowInterstitial() {
+  matchesSinceAd++;
+  if (matchesSinceAd < AD_EVERY_N_MATCHES) return;
+  if (Date.now() - lastAdTime < AD_MIN_GAP_MS) return;
+  // Only touch the native bridge if it's actually present. If absent, leave the
+  // counters as-is so the ad shows as soon as a bridge appears (no-op otherwise).
+  if (window.AndroidAds && typeof window.AndroidAds.showInterstitial === 'function') {
+    try { window.AndroidAds.showInterstitial(); } catch (e) {}
+    matchesSinceAd = 0;
+    lastAdTime = Date.now();
+  }
+}
+
+function setStatus(s) { document.getElementById('status').textContent = s; }
+function showMenu() { menu.classList.remove('hidden'); }
+
+function showMenuButtons() {
+  document.getElementById('menu-buttons').classList.remove('hidden');
+  document.getElementById('waiting').classList.add('hidden');
+}
+function showWaiting(kind, code) {
+  document.getElementById('menu-buttons').classList.add('hidden');
+  const w = document.getElementById('waiting'); w.classList.remove('hidden');
+  const cd = document.getElementById('room-code-display');
+  const msg = document.getElementById('waiting-msg');
+  if (kind === 'host') { cd.textContent = code; cd.classList.remove('hidden'); msg.textContent = 'Waiting for opponent…'; }
+  else { cd.textContent = ''; cd.classList.add('hidden'); msg.textContent = 'Finding opponent…'; }
+  setStatus('');
+}
+
+function showOverlay() {
+  document.getElementById('overlay').classList.remove('hidden');
+  document.getElementById('btn-rematch').disabled = false;
+  document.getElementById('overlay-wait').classList.add('hidden');
+}
+function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
+
+// return to menu, dropping any online session cleanly
+function returnToMenu() {
+  state.running = false; state.over = false;
+  state.localRematchReady = false; state.peerRematchReady = false;
+  hideOverlay();
+  Net.leave();
+  showMenu(); showMenuButtons(); setStatus('');
+}
+
+// opponent disconnected / connection dropped mid-match
+function handleDisconnect(msg) {
+  state.running = false; state.over = false;
+  state.localRematchReady = false; state.peerRematchReady = false;
+  hideOverlay();
+  Net.leave();
+  showMenu(); showMenuButtons(); setStatus(msg);
+}
+
+function startMatch(mode) {
+  state.mode = mode;
+  state.roundWins = [0, 0]; state.roundNum = 1; state.roundTimeLeft = ROUND_TIME;
+  state.over = false; state.overText = ''; state.goalFlash = 0;
+  state.roundResult = 0; state.roundResultText = '';
+  state.localRematchReady = false; state.peerRematchReady = false;
+  state.particles.length = 0;
+  if (mode === 'offline') { state.isHost = true; state.myIdx = 0; }
+  resetKickoff();
+  state.running = true; last = performance.now();
+  menu.classList.add('hidden');
+  hideOverlay();
+  setStatus('');
+  requestFullscreenLandscape();
+}
+
+async function requestFullscreenLandscape() {
+  try {
+    if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
+    if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+  } catch (e) { /* not supported everywhere; rotate overlay covers it */ }
+}
+
+/* ---- menu button wiring ---- */
+document.getElementById('btn-offline').addEventListener('click', () => { initAudio(); startMatch('offline'); });
+document.getElementById('btn-quick').addEventListener('click', () => { initAudio(); Net.quick(); });
+document.getElementById('btn-host').addEventListener('click', () => { initAudio(); Net.host(); });
+document.getElementById('btn-join').addEventListener('click', () => {
+  initAudio();
+  const code = document.getElementById('room-input').value.trim().toUpperCase();
+  if (!code) { setStatus('Enter a room code.'); return; }
+  Net.join(code);
+});
+document.getElementById('btn-cancel').addEventListener('click', () => {
+  Net.leave();
+  showMenuButtons(); setStatus('');
+});
+
+/* ---- game-over overlay wiring ---- */
+document.getElementById('btn-menu').addEventListener('click', returnToMenu);
+document.getElementById('btn-rematch').addEventListener('click', () => {
+  if (state.mode === 'offline') { resetMatch(); return; }
+  state.localRematchReady = true;
+  Net.sendRematch();
+  document.getElementById('btn-rematch').disabled = true;
+  document.getElementById('overlay-wait').classList.remove('hidden');
+  // host will reset once both sides are ready; guest follows the next snapshot
+});
+
+requestAnimationFrame(loop);

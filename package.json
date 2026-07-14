@@ -1,0 +1,12 @@
+{
+  "name": "rocket-soccer",
+  "version": "1.0.0",
+  "description": "2-player HTML5 car soccer game (Rocket League style) for mobile landscape",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
