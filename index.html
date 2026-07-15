@@ -617,8 +617,20 @@ function loop(ts) {
         physicsCommon(dt);
       }
     } else {
-      // guest: predict own car locally, snap everything to host
-      if (!frozen) stepCar(state.cars[1], input, dt);
+      // guest: predict own car AND run local ball/collision physics so a hit
+      // shows up instantly, instead of waiting for a host round-trip. The
+      // opponent car is coasted with no new input (we don't know it yet) and
+      // gets corrected below by applySnapshot(); the ball keeps getting
+      // reconciled with the host's authoritative snapshot too, so any small
+      // prediction error self-corrects within a frame or two.
+      if (!frozen) {
+        stepCar(state.cars[0], { x: 0, y: 0, boost: false }, dt);
+        stepCar(state.cars[1], input, dt);
+        collideCars(state.cars[0], state.cars[1]);
+        collideCarBall(state.cars[0]);
+        collideCarBall(state.cars[1]);
+        stepBall(dt); // scoring/goal is ignored here; host snapshot decides rounds
+      }
       applySnapshot();
     }
   } else if (state.mode === 'online' && !state.isHost) {
