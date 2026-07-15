@@ -549,6 +549,7 @@ function applySnapshot() {
   if (!netInterp) return;
   const d = netInterp;
   d.cars.forEach((a, i) => {
+    if (i === state.myIdx) return; // don't fight local prediction for our own car
     const c = state.cars[i];
     // smooth toward authoritative position
     c.x += (a[0]-c.x)*0.25; c.y += (a[1]-c.y)*0.25; c.ang = a[2];
