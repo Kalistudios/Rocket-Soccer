@@ -348,7 +348,6 @@ const Net = (function () {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     
     ws = new WebSocket(WS_URL);
-    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
       wsConnected = true;
@@ -385,7 +384,7 @@ const Net = (function () {
     ws.onerror = (e) => console.error('WS error:', e);
 
     ws.onmessage = (event) => {
-      const msg = JSON.parse(new TextDecoder().decode(event.data));
+      const msg = JSON.parse(event.data);
       handleMessage(msg);
     };
   }
