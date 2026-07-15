@@ -331,6 +331,7 @@ function botInput(c) {
 /* ================= NETWORKING (WebSocket) ================= */
 let remoteInput = { x: 0, y: 0, boost: false };   // host: guest's input
 let netInterp = null;                              // guest: latest snapshot
+let ballPredict = { x: 0, y: 0, vx: 0, vy: 0, t: 0 }; // guest: dead-reckoning for smooth ball motion
 let myRole = null;        // 'host' | 'guest'
 let roomCode = null;
 let pendingJoinCode = null;
@@ -420,6 +421,9 @@ const Net = (function () {
       case 'snap':      // guest receives snapshot
         if (!state.isHost) {
           netInterp = msg;
+          ballPredict.x = msg.ball[0]; ballPredict.y = msg.ball[1];
+          ballPredict.vx = msg.ball[2]; ballPredict.vy = msg.ball[3];
+          ballPredict.t = performance.now();
         }
         break;
 
@@ -510,6 +514,7 @@ const Net = (function () {
       pendingHost = false;
       remoteInput = { x: 0, y: 0, boost: false };
       netInterp = null;
+      ballPredict.t = 0;
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
       wsConnected = false;
       if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
@@ -556,7 +561,13 @@ function applySnapshot() {
     c.boost = a[3]; c.boosting = !!a[4]; c.vx = a[5]; c.vy = a[6];
   });
   const b = state.ball;
-  b.x += (d.ball[0]-b.x)*0.3; b.y += (d.ball[1]-b.y)*0.3; b.vx = d.ball[2]; b.vy = d.ball[3];
+  if (ballPredict.t) {
+    const elapsed = (performance.now() - ballPredict.t) / 1000;
+    const px = ballPredict.x + ballPredict.vx * elapsed;
+    const py = ballPredict.y + ballPredict.vy * elapsed;
+    b.x += (px - b.x) * 0.35; b.y += (py - b.y) * 0.35;
+    b.vx = ballPredict.vx; b.vy = ballPredict.vy;
+  }
   if (d.roundWins) state.roundWins = d.roundWins;
   if (d.roundNum) state.roundNum = d.roundNum;
   state.countdown = d.cd;
