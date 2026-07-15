@@ -108,9 +108,7 @@
 
 /* ==== WEBSOCKET CONFIG ==== */
 // Auto-detect server URL: same host for production, localhost for dev
-const WS_URL = (location.hostname === 'localhost' || location.hostname === '127.0.0.1')
-  ? `ws://${location.hostname}:3000`
-  : `wss://${location.hostname}${location.port ? ':' + location.port : ''}`;
+const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}${location.port ? ':' + location.port : ''}`;
 
 let ws = null;
 let wsConnected = false;
