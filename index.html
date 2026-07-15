@@ -562,10 +562,12 @@ function applySnapshot() {
   });
   const b = state.ball;
   if (ballPredict.t) {
-    const elapsed = (performance.now() - ballPredict.t) / 1000;
+    const elapsed = Math.min((performance.now() - ballPredict.t) / 1000, 0.2);
     const px = ballPredict.x + ballPredict.vx * elapsed;
     const py = ballPredict.y + ballPredict.vy * elapsed;
-    b.x += (px - b.x) * 0.35; b.y += (py - b.y) * 0.35;
+    const errSq = (px - b.x) * (px - b.x) + (py - b.y) * (py - b.y);
+    const k = errSq > 2500 ? 0.6 : 0.35; // snap fast after bounces/spikes, smooth otherwise
+    b.x += (px - b.x) * k; b.y += (py - b.y) * k;
     b.vx = ballPredict.vx; b.vy = ballPredict.vy;
   }
   if (d.roundWins) state.roundWins = d.roundWins;
