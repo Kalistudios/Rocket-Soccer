@@ -335,6 +335,7 @@ let myRole = null;        // 'host' | 'guest'
 let roomCode = null;
 let pendingJoinCode = null;
 let pendingQuick = false;
+let pendingHost = false;
 let wsReconnectTimer = null;
 
 /* ---- WebSocket Network Module ---- */
@@ -358,6 +359,9 @@ const Net = (function () {
       // If we were in a room, rejoin
       if (myRole === 'host' && roomCode) {
         send({ t: 'host', room: roomCode });
+      } else if (pendingHost) {
+        send({ t: 'host' });
+        pendingHost = false;
       } else if (myRole === 'guest' && roomCode) {
         send({ t: 'join', room: roomCode });
       } else if (pendingJoinCode) {
@@ -465,6 +469,7 @@ const Net = (function () {
     host() {
       connect();
       myRole = 'host';
+      pendingHost = true;
       // Server will generate code and respond with 'wait'
     },
 
@@ -503,6 +508,7 @@ const Net = (function () {
       roomCode = null;
       pendingJoinCode = null;
       pendingQuick = false;
+      pendingHost = false;
       remoteInput = { x: 0, y: 0, boost: false };
       netInterp = null;
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
