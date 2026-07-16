@@ -1,7 +1,14 @@
 'use strict';
 // Rocket Soccer — static file host + WebSocket matchmaking/relay server.
-// Pairs two players per room; the host client simulates physics and the
-// server just relays host snapshots and guest inputs between the pair.
+//
+// Model: ONE authority per room (the first player = "host"/slot 0). The host
+// client simulates all physics and broadcasts world snapshots. Every other
+// player ("guest") only sends its input and renders the host's snapshots.
+// The server is a dumb relay + lobby: it never simulates anything.
+//
+// Rooms hold up to 4 players. Modes: 1v1 (2 players) or 2v2 (4 players).
+// Slot assignment is join order (0..N-1). Team = slot % 2 (even = blue/left,
+// odd = orange/right), which auto-balances teams for both modes.
 
 const http = require('http');
 const fs = require('fs');
@@ -9,6 +16,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
+const NEED = { '1v1': 2, '2v2': 4 };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -33,35 +41,62 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
-// rooms: code -> { host: ws|null, guest: ws|null }
+// code -> { code, mode, players: ws[], started: bool }
 const rooms = new Map();
-let quickQueue = null; // one waiting quick-match player
-
-function makeCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let c = '';
-  do { c = Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join(''); }
-  while (rooms.has(c));
-  return c;
-}
-
-function startRoom(code, host, guest) {
-  const room = { host, guest };
-  rooms.set(code, room);
-  host.roomCode = code; host.isHost = true;
-  guest.roomCode = code; guest.isHost = false;
-  send(host, { t: 'start', room: code, host: true });
-  send(guest, { t: 'start', room: code, host: false });
-}
+// mode -> ws[] waiting for a quick match
+const quickQueues = { '1v1': [], '2v2': [] };
 
 function send(ws, obj) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
 }
 
-function peerOf(ws) {
+function makeCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let c;
+  do { c = Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join(''); }
+  while (rooms.has(c));
+  return c;
+}
+
+function addToRoom(room, ws) {
+  ws.roomCode = room.code;
+  ws.slot = room.players.length;
+  ws.isHost = (ws.slot === 0);
+  room.players.push(ws);
+}
+
+// Tell everyone in the room how many players have joined (lobby progress).
+function broadcastRoster(room) {
+  for (const p of room.players) {
+    send(p, { t: 'roster', room: room.code, mode: room.mode, count: room.players.length, need: NEED[room.mode] });
+  }
+}
+
+// Room is full -> lock it and tell each player its slot + role.
+function startRoom(room) {
+  room.started = true;
+  room.players.forEach((ws, i) => {
+    ws.slot = i; ws.isHost = (i === 0);
+    send(ws, { t: 'start', room: room.code, slot: i, isHost: i === 0, mode: room.mode, need: NEED[room.mode] });
+  });
+}
+
+// Remove a socket from any queue/room. If it was in an active room, the match
+// can't continue without every player (the host is the authority), so we end
+// it for everyone and drop the room. Simple and glitch-free.
+function leaveEverything(ws) {
+  for (const k of Object.keys(quickQueues)) {
+    const i = quickQueues[k].indexOf(ws);
+    if (i >= 0) quickQueues[k].splice(i, 1);
+  }
   const room = rooms.get(ws.roomCode);
-  if (!room) return null;
-  return ws.isHost ? room.guest : room.host;
+  if (room && room.players.includes(ws)) {
+    for (const p of room.players) {
+      if (p !== ws) { send(p, { t: 'peer-left' }); p.roomCode = undefined; p.slot = undefined; p.isHost = undefined; }
+    }
+    rooms.delete(room.code);
+  }
+  ws.roomCode = undefined; ws.slot = undefined; ws.isHost = undefined;
 }
 
 wss.on('connection', ws => {
@@ -72,77 +107,79 @@ wss.on('connection', ws => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
 
-    // Create a new coded room and wait for a guest to join.
+    // Create a coded room and wait for it to fill.
     if (m.t === 'host') {
+      const mode = (m.mode === '2v2') ? '2v2' : '1v1';
       const code = makeCode();
-      rooms.set(code, { host: ws, guest: null });
-      ws.roomCode = code; ws.isHost = true;
-      send(ws, { t: 'wait', room: code, host: true });
+      const room = { code, mode, players: [], started: false };
+      rooms.set(code, room);
+      addToRoom(room, ws);
+      send(ws, { t: 'wait', room: code, slot: 0, mode, count: 1, need: NEED[mode] });
       return;
     }
 
-    // Join an EXISTING coded room only. Never create a room here.
+    // Join an existing room by code. Auto-starts when full.
     if (m.t === 'join') {
       const code = String(m.room || '').trim().toUpperCase();
       const room = rooms.get(code);
-      if (!room) {
-        send(ws, { t: 'notfound' });
-      } else if (room.guest) {
-        send(ws, { t: 'full' });
-      } else {
-        startRoom(code, room.host, ws);
-      }
+      if (!room) { send(ws, { t: 'notfound' }); return; }
+      if (room.started || room.players.length >= NEED[room.mode]) { send(ws, { t: 'full' }); return; }
+      addToRoom(room, ws);
+      broadcastRoster(room);
+      if (room.players.length === NEED[room.mode]) startRoom(room);
       return;
     }
 
-    // Quick match: pair with a single waiting player, else queue.
+    // Quick match: queue per mode; form a room once enough players are waiting.
     if (m.t === 'quick') {
-      if (quickQueue && quickQueue.readyState === 1) {
-        const host = quickQueue; quickQueue = null;
-        startRoom(makeCode(), host, ws);
+      const mode = (m.mode === '2v2') ? '2v2' : '1v1';
+      const q = quickQueues[mode];
+      if (!q.includes(ws)) q.push(ws);
+      if (q.length >= NEED[mode]) {
+        const group = q.splice(0, NEED[mode]);
+        const room = { code: makeCode(), mode, players: [], started: false };
+        rooms.set(room.code, room);
+        for (const p of group) addToRoom(room, p);
+        startRoom(room);
       } else {
-        quickQueue = ws;
-        send(ws, { t: 'queued' });
+        send(ws, { t: 'queued', mode, count: q.length, need: NEED[mode] });
       }
       return;
     }
 
-    // Leave a waiting state before a match starts.
-    if (m.t === 'cancel') {
-      if (quickQueue === ws) quickQueue = null;
+    // Back out of a lobby/queue.
+    if (m.t === 'cancel') { leaveEverything(ws); return; }
+
+    // Guest input -> forward to host only, tagged with the sender's slot.
+    if (m.t === 'input') {
       const room = rooms.get(ws.roomCode);
-      if (room && room.host === ws && !room.guest) {
-        rooms.delete(ws.roomCode);
-      }
-      ws.roomCode = undefined; ws.isHost = undefined;
+      if (!room || !room.started) return;
+      m.slot = ws.slot;
+      send(room.players[0], m);
       return;
     }
 
-    // Relay a rematch request to the peer.
+    // Host snapshot -> broadcast to every guest.
+    if (m.t === 'snap') {
+      const room = rooms.get(ws.roomCode);
+      if (!room || !room.started || !ws.isHost) return;
+      for (const p of room.players) { if (p !== ws) send(p, m); }
+      return;
+    }
+
+    // Any player asks for a rematch -> nudge the host, which resets the match.
     if (m.t === 'rematch') {
-      send(peerOf(ws), { t: 'rematch' });
+      const room = rooms.get(ws.roomCode);
+      if (!room) return;
+      send(room.players[0], { t: 'rematch' });
       return;
     }
-
-    // relay gameplay traffic to the peer
-    if (m.t === 'snap' || m.t === 'input') {
-      send(peerOf(ws), m);
-    }
   });
 
-  ws.on('close', () => {
-    if (quickQueue === ws) quickQueue = null;
-    const room = rooms.get(ws.roomCode);
-    if (room) {
-      const peer = ws.isHost ? room.guest : room.host;
-      send(peer, { t: 'peer-left' });
-      if (peer) peer.roomCode = undefined;
-      rooms.delete(ws.roomCode);
-    }
-  });
+  ws.on('close', () => { leaveEverything(ws); });
 });
 
-// drop dead connections
+// Drop dead connections.
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.isAlive) { ws.terminate(); continue; }
@@ -152,6 +189,5 @@ setInterval(() => {
 }, 30000);
 
 server.listen(PORT, () => {
-  console.log(`Rocket Soccer server running:  http://localhost:${PORT}`);
-  console.log('On your Android phone (same Wi-Fi), open  http://<this-PC-ip>:' + PORT);
+  console.log('Rocket Soccer server running:  http://localhost:' + PORT);
 });
