@@ -329,9 +329,13 @@ function botInput(c) {
 }
 
 /* ================= NETWORKING (WebSocket) ================= */
-let remoteInput = { x: 0, y: 0, boost: false };   // host: guest's input
-let netInterp = null;                              // guest: latest snapshot
-let ballPredict = { x: 0, y: 0, vx: 0, vy: 0, t: 0 }; // guest: dead-reckoning for smooth ball motion
+// host: latest input received from the guest
+let remoteInput = { x: 0, y: 0, boost: false };
+// guest: buffer of authoritative snapshots used for entity interpolation
+let snapBuffer = [];
+const INTERP_DELAY = 100;      // ms — render remote entities this far in the past
+const SNAP_BUFFER_MS = 1000;   // keep ~1s of snapshots around
+const NET_INTERVAL = 1 / 30;   // 30 Hz snapshot / input send rate
 let myRole = null;        // 'host' | 'guest'
 let roomCode = null;
 let pendingJoinCode = null;
@@ -341,10 +345,6 @@ let wsReconnectTimer = null;
 
 /* ---- WebSocket Network Module ---- */
 const Net = (function () {
-  let seq = 0;              // for input sequencing
-  let lastAck = -1;         // last acknowledged input seq
-  let pendingInputs = [];   // for reconciliation
-
   function connect() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     
@@ -418,12 +418,13 @@ const Net = (function () {
         }
         break;
 
-      case 'snap':      // guest receives snapshot
+      case 'snap':      // guest receives an authoritative snapshot
         if (!state.isHost) {
-          netInterp = msg;
-          ballPredict.x = msg.ball[0]; ballPredict.y = msg.ball[1];
-          ballPredict.vx = msg.ball[2]; ballPredict.vy = msg.ball[3];
-          ballPredict.t = performance.now();
+          const now = performance.now();
+          snapBuffer.push({ t: now, d: msg });
+          const cutoff = now - SNAP_BUFFER_MS;
+          while (snapBuffer.length > 2 && snapBuffer[0].t < cutoff) snapBuffer.shift();
+          applySnapshotMeta(msg);   // score/round/countdown/over are not interpolated
         }
         break;
 
@@ -492,19 +493,16 @@ const Net = (function () {
     },
 
     sendInput(obj) {
-      if (!state.isHost && wsConnected) {
-        seq++;
-        obj.seq = seq;
-        pendingInputs.push({ seq, input: obj, time: performance.now() });
-        // Keep last 60 inputs for reconciliation
-        if (pendingInputs.length > 60) pendingInputs.shift();
-        send({ t: 'input', ...obj });
-      }
+      if (!state.isHost && wsConnected) send({ t: 'input', ...obj });
     },
 
     sendRematch() {
       if (wsConnected) send({ t: 'rematch' });
     },
+
+    // WS relay keeps no persistent rematch flags, so there is nothing to wipe.
+    // Present so resetMatch() can call it unconditionally without throwing.
+    clearRematch() {},
 
     leave() {
       myRole = null;
@@ -513,8 +511,7 @@ const Net = (function () {
       pendingQuick = false;
       pendingHost = false;
       remoteInput = { x: 0, y: 0, boost: false };
-      netInterp = null;
-      ballPredict.t = 0;
+      snapBuffer = [];
       if (ws) { ws.onclose = null; ws.close(); ws = null; }
       wsConnected = false;
       if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
@@ -550,33 +547,71 @@ function netTick() {
   }
 }
 
-function applySnapshot() {
-  if (!netInterp) return;
-  const d = netInterp;
-  d.cars.forEach((a, i) => {
-    if (i === state.myIdx) return; // don't fight local prediction for our own car
-    const c = state.cars[i];
-    // smooth toward authoritative position
-    c.x += (a[0]-c.x)*0.25; c.y += (a[1]-c.y)*0.25; c.ang = a[2];
-    c.boost = a[3]; c.boosting = !!a[4]; c.vx = a[5]; c.vy = a[6];
-  });
-  const b = state.ball;
-  if (ballPredict.t) {
-    const elapsed = Math.min((performance.now() - ballPredict.t) / 1000, 0.2);
-    const px = ballPredict.x + ballPredict.vx * elapsed;
-    const py = ballPredict.y + ballPredict.vy * elapsed;
-    const errSq = (px - b.x) * (px - b.x) + (py - b.y) * (py - b.y);
-    const k = errSq > 2500 ? 0.6 : 0.35; // snap fast after bounces/spikes, smooth otherwise
-    b.x += (px - b.x) * k; b.y += (py - b.y) * k;
-    b.vx = ballPredict.vx; b.vy = ballPredict.vy;
+function lerp(a, b, t) { return a + (b - a) * t; }
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
+// guest: render the opponent car + ball straight from the authoritative buffer,
+// delayed by INTERP_DELAY so there are always two real snapshots to interpolate
+// between. This is what the host computed, so both screens agree — no jitter,
+// no divergence, and ball reactions match the host exactly.
+function interpolateRemote() {
+  if (!snapBuffer.length) return;
+  const renderT = performance.now() - INTERP_DELAY;
+  let older = null, newer = null;
+  for (let i = snapBuffer.length - 1; i >= 0; i--) {
+    if (snapBuffer[i].t <= renderT) { older = snapBuffer[i]; newer = snapBuffer[i + 1] || null; break; }
   }
+  let a, b, alpha;
+  if (!older) { a = b = snapBuffer[0].d; alpha = 0; }        // buffer still filling
+  else if (!newer) { a = b = older.d; alpha = 0; }           // nothing newer yet — hold last
+  else {
+    a = older.d; b = newer.d;
+    const span = newer.t - older.t;
+    alpha = span > 0 ? Math.max(0, Math.min(1, (renderT - older.t) / span)) : 0;
+  }
+  const opp = state.myIdx === 0 ? 1 : 0;
+  const ca = a.cars[opp], cb = b.cars[opp], car = state.cars[opp];
+  car.x = lerp(ca[0], cb[0], alpha);
+  car.y = lerp(ca[1], cb[1], alpha);
+  car.ang = lerpAngle(ca[2], cb[2], alpha);
+  car.boost = cb[3]; car.boosting = !!cb[4]; car.vx = cb[5]; car.vy = cb[6];
+  const bl = state.ball;
+  bl.x = lerp(a.ball[0], b.ball[0], alpha);
+  bl.y = lerp(a.ball[1], b.ball[1], alpha);
+  bl.vx = b.ball[2]; bl.vy = b.ball[3];
+}
+
+// guest: keep the locally-predicted own car anchored to host authority so it can
+// never drift away from where the host thinks it is. Small errors are eased out
+// smoothly; large ones (kickoff resets, big desync) snap instantly.
+function reconcileOwnCar() {
+  if (!snapBuffer.length) return;
+  const a = snapBuffer[snapBuffer.length - 1].d.cars[state.myIdx];
+  const c = state.cars[state.myIdx];
+  const ex = a[0] - c.x, ey = a[1] - c.y;
+  if (ex * ex + ey * ey > 40000) {          // >200px apart: teleport/reset — hard snap
+    c.x = a[0]; c.y = a[1]; c.ang = a[2]; c.vx = a[5]; c.vy = a[6];
+  } else {
+    c.x += ex * 0.12; c.y += ey * 0.12;      // gentle pull removes accumulated drift
+  }
+  c.boost = a[3];
+}
+
+// non-interpolated match state relayed from the host (score, round, countdown, over)
+function applySnapshotMeta(d) {
   if (d.roundWins) state.roundWins = d.roundWins;
   if (d.roundNum) state.roundNum = d.roundNum;
-  state.countdown = d.cd;
+  if (typeof d.cd === 'number') state.countdown = d.cd;
   if (d.roundResult) { state.roundResultText = d.roundResult; state.roundResult = Math.max(state.roundResult, 0.5); }
   if (d.matchOver) {
     if (!state.over) endMatch(d.matchOver);
   } else if (state.over) {
+    // host reset for a rematch — follow along
     state.over = false; state.overText = '';
     state.localRematchReady = false; state.peerRematchReady = false;
     hideOverlay();
@@ -617,25 +652,15 @@ function loop(ts) {
         physicsCommon(dt);
       }
     } else {
-      // guest: predict own car AND run local ball/collision physics so a hit
-      // shows up instantly, instead of waiting for a host round-trip. The
-      // opponent car is coasted with no new input (we don't know it yet) and
-      // gets corrected below by applySnapshot(); the ball keeps getting
-      // reconciled with the host's authoritative snapshot too, so any small
-      // prediction error self-corrects within a frame or two.
-      if (!frozen) {
-        stepCar(state.cars[0], { x: 0, y: 0, boost: false }, dt);
-        stepCar(state.cars[1], input, dt);
-        collideCars(state.cars[0], state.cars[1]);
-        collideCarBall(state.cars[0]);
-        collideCarBall(state.cars[1]);
-        stepBall(dt); // scoring/goal is ignored here; host snapshot decides rounds
-      }
-      applySnapshot();
+      // guest: predict own car locally, interpolate opponent + ball from host,
+      // then reconcile the predicted car back toward host authority
+      if (!frozen) stepCar(state.cars[state.myIdx], input, dt);
+      interpolateRemote();
+      reconcileOwnCar();
     }
   } else if (state.mode === 'online' && !state.isHost) {
-    // guest keeps consuming snapshots so it can follow a host rematch reset
-    applySnapshot();
+    // guest keeps interpolating so it follows a host rematch reset smoothly
+    interpolateRemote();
   }
 
   // host resolves an agreed rematch
@@ -645,7 +670,7 @@ function loop(ts) {
   }
 
   netAcc += dt;
-  if (netAcc > 1/60) { netAcc = 0; netTick(); }
+  if (netAcc >= NET_INTERVAL) { netAcc = 0; netTick(); }
 
   state.goalFlash = Math.max(0, state.goalFlash - dt);
   state.roundResult = Math.max(0, state.roundResult - dt);
