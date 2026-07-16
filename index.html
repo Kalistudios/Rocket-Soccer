@@ -23,37 +23,39 @@
 
   #menu {
     position: fixed; inset: 0; z-index: 50;
-    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
     background: radial-gradient(ellipse at center, #12204a 0%, #0a0e1a 70%);
-    color: #fff;
+    color: #fff; padding: 20px; overflow-y: auto;
   }
   #menu h1 {
-    font-size: clamp(28px, 7vw, 56px); font-style: italic; letter-spacing: 2px;
+    font-size: clamp(26px, 6.5vw, 52px); font-style: italic; letter-spacing: 2px;
     background: linear-gradient(90deg, #ff7b00, #ffd000, #00d0ff);
     -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     text-transform: uppercase;
   }
-  #menu .sub { color: #8899cc; font-size: 14px; margin-bottom: 10px; }
-  #menu-buttons { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  #menu .sub { color: #8899cc; font-size: 13px; margin-bottom: 6px; text-align: center; }
+  #menu-buttons { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .row { display: flex; gap: 10px; }
   .btn {
-    padding: 14px 40px; font-size: 18px; font-weight: 700; letter-spacing: 1px;
-    border: none; border-radius: 10px; cursor: pointer; color: #fff; min-width: 240px;
+    padding: 13px 30px; font-size: 17px; font-weight: 700; letter-spacing: 1px;
+    border: none; border-radius: 10px; cursor: pointer; color: #fff; min-width: 220px;
     background: linear-gradient(135deg, #1e5eff, #0038b8); box-shadow: 0 4px 18px rgba(30,94,255,.45);
   }
+  .btn.sm { min-width: 105px; padding: 13px 14px; font-size: 15px; }
   .btn.alt { background: linear-gradient(135deg, #ff7b00, #c24a00); box-shadow: 0 4px 18px rgba(255,123,0,.45); }
   .btn.ghost { background: linear-gradient(135deg, #3a4670, #232c4a); box-shadow: 0 4px 18px rgba(40,50,90,.45); }
   .btn:active { transform: scale(.96); }
   .btn:disabled { opacity: .5; cursor: default; transform: none; }
-  #status { color: #ffd000; font-size: 14px; min-height: 20px; }
-  #room-row { display: flex; gap: 8px; align-items: center; }
+  .divider { color: #556; font-size: 12px; letter-spacing: 2px; margin: 2px 0; }
+  #status { color: #ffd000; font-size: 14px; min-height: 20px; text-align: center; }
   #room-input {
-    padding: 12px; font-size: 20px; width: 150px; text-align: center; letter-spacing: 6px;
+    padding: 12px; font-size: 20px; width: 130px; text-align: center; letter-spacing: 5px;
     border-radius: 10px; border: 2px solid #2a3c70; background: #0e1630; color: #fff; text-transform: uppercase;
   }
-  #waiting { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  #waiting { display: flex; flex-direction: column; align-items: center; gap: 16px; }
   #room-code-display {
-    font-size: clamp(44px, 13vw, 96px); font-weight: 800; letter-spacing: 12px;
-    color: #ffd000; text-shadow: 0 4px 24px rgba(255,208,0,.4); padding-left: 12px;
+    font-size: clamp(40px, 12vw, 88px); font-weight: 800; letter-spacing: 10px;
+    color: #ffd000; text-shadow: 0 4px 24px rgba(255,208,0,.4); padding-left: 10px;
   }
   #waiting-msg { color: #cfd8ff; font-size: 18px; }
   #overlay {
@@ -79,13 +81,22 @@
   <div class="sub">Car soccer &mdash; best of 7 rounds, first goal wins the round</div>
 
   <div id="menu-buttons">
-    <button class="btn" id="btn-quick">PLAY ONLINE (QUICK MATCH)</button>
-    <button class="btn" id="btn-host">HOST GAME</button>
-    <div id="room-row">
-      <input id="room-input" maxlength="5" placeholder="CODE" autocomplete="off">
-      <button class="btn alt" id="btn-join" style="min-width:140px;padding:14px 18px">JOIN GAME</button>
+    <button class="btn" id="btn-quick">QUICK MATCH (1v1)</button>
+    <div class="divider">— HOST A GAME —</div>
+    <div class="row">
+      <button class="btn sm" id="btn-host1">HOST 1v1</button>
+      <button class="btn sm" id="btn-host2">HOST 2v2</button>
     </div>
-    <button class="btn alt" id="btn-offline">VS BOT (OFFLINE)</button>
+    <div class="divider">— JOIN WITH CODE —</div>
+    <div class="row">
+      <input id="room-input" maxlength="5" placeholder="CODE" autocomplete="off">
+      <button class="btn sm alt" id="btn-join">JOIN</button>
+    </div>
+    <div class="divider">— OFFLINE —</div>
+    <div class="row">
+      <button class="btn sm ghost" id="btn-bot1">VS BOT 1v1</button>
+      <button class="btn sm ghost" id="btn-bot2">VS BOTS 2v2</button>
+    </div>
   </div>
 
   <div id="waiting" class="hidden">
@@ -100,31 +111,35 @@
 <div id="overlay" class="hidden">
   <button class="btn" id="btn-rematch">REMATCH</button>
   <button class="btn alt" id="btn-menu">MENU</button>
-  <div id="overlay-wait" class="hidden">Waiting for opponent to accept rematch…</div>
+  <div id="overlay-wait" class="hidden">Waiting for host to restart…</div>
 </div>
 
 <script>
 'use strict';
 
-/* ==== WEBSOCKET CONFIG ==== */
-// Auto-detect server URL: same host for production, localhost for dev
+/* ==== WEBSOCKET ENDPOINT (same origin as the page) ==== */
 const WS_URL = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.hostname}${location.port ? ':' + location.port : ''}`;
 
-let ws = null;
-let wsConnected = false;
-let wsReconnecting = false;
-
 /* ================= CONFIG ================= */
-const FIELD_W = 1600, FIELD_H = 900;          // logical field size (landscape)
+const FIELD_W = 1600, FIELD_H = 900;
 const GOAL_H = 280, GOAL_DEPTH = 60;
 const CAR_R = 26, BALL_R = 34;
 const CAR_ACCEL = 900, CAR_MAXSPD = 460, BOOST_ACCEL = 1400, BOOST_MAXSPD = 760;
-const CAR_TURN = 3.6;                          // rad/s at full stick
+const CAR_TURN = 3.6;
 const FRICTION = 1.6, BALL_FRICTION = 0.45, WALL_BOUNCE = 0.72, BALL_WALL_BOUNCE = 0.86;
 const BOOST_MAX = 100, BOOST_DRAIN = 38, BOOST_REGEN = 14;
-const ROUNDS_TO_WIN = 4;                        // best of 7
-const ROUND_TIME = 60;                          // seconds per round (soft replay timer)
-const TICK = 1 / 60;
+const ROUNDS_TO_WIN = 4;          // best of 7
+const ROUND_TIME = 60;            // seconds per round (soft replay timer)
+
+const DT = 1 / 60;                // fixed physics timestep (host)
+const SNAP_RATE = 1 / 30;         // 30 Hz snapshot / input send rate
+const INTERP_DELAY = 100;         // ms — guests render this far in the past
+const SNAP_BUFFER_MS = 1000;      // keep ~1s of snapshots
+
+const TEAM_COL = [
+  { body: '#3a8dff', dark: '#1d4f9e', glow: '#4da3ff' },  // 0 = blue (left)
+  { body: '#ff8a1e', dark: '#a34f00', glow: '#ffa030' },  // 1 = orange (right)
+];
 
 /* ================= STATE ================= */
 const canvas = document.getElementById('game');
@@ -133,37 +148,52 @@ let W = 0, H = 0, scale = 1, offX = 0, offY = 0, DPR = 1;
 
 const state = {
   mode: null,               // 'online' | 'offline'
+  submode: '1v1',           // '1v1' | '2v2'
+  numPlayers: 2,
   running: false,
-  isHost: true,             // authoritative for ball/rounds
-  myIdx: 0,                 // 0 = blue (left), 1 = orange (right)
-  roundWins: [0, 0],        // best-of-7 tally
+  isHost: true,             // authoritative simulator
+  mySlot: 0,                // index of the car this client controls
+  roundWins: [0, 0],        // [blue, orange]
   roundNum: 1,
   roundTimeLeft: ROUND_TIME,
-  countdown: 0,             // kickoff freeze
+  countdown: 0,
   goalFlash: 0, goalText: '',
   roundResult: 0, roundResultText: '',
-  over: false, overText: '',
-  localRematchReady: false, peerRematchReady: false,
-  cars: [mkCar(0), mkCar(1)],
-  ball: { x: FIELD_W/2, y: FIELD_H/2, vx: 0, vy: 0 },
+  over: false, overText: '', winTeam: -1,
+  cars: [],
+  ball: { x: FIELD_W / 2, y: FIELD_H / 2, vx: 0, vy: 0 },
   particles: [],
 };
 
-function mkCar(idx) {
-  return { x: 0, y: 0, vx: 0, vy: 0, ang: 0, boost: BOOST_MAX, boosting: false, idx };
+const ZERO = { x: 0, y: 0, boost: false };
+
+function teamOf(slot) { return slot % 2; }
+function mkCar(slot) {
+  return { x: 0, y: 0, vx: 0, vy: 0, ang: 0, boost: BOOST_MAX, boosting: false, slot, team: teamOf(slot) };
+}
+function buildCars(n) { state.cars = []; for (let i = 0; i < n; i++) state.cars.push(mkCar(i)); }
+
+// Kickoff placement: teams spread on their own half, members spread vertically.
+function kickoffPos(slot, numPlayers) {
+  const team = teamOf(slot);
+  const mates = [];
+  for (let s = 0; s < numPlayers; s++) if (teamOf(s) === team) mates.push(s);
+  const idx = mates.indexOf(slot), n = mates.length;
+  const x = team === 0 ? FIELD_W * 0.25 : FIELD_W * 0.75;
+  const y = n <= 1 ? FIELD_H / 2 : FIELD_H * (0.34 + 0.32 * idx);
+  const ang = team === 0 ? 0 : Math.PI;
+  return { x, y, ang };
 }
 function resetKickoff() {
-  const b = state.ball; b.x = FIELD_W/2; b.y = FIELD_H/2; b.vx = 0; b.vy = 0;
+  const b = state.ball; b.x = FIELD_W / 2; b.y = FIELD_H / 2; b.vx = 0; b.vy = 0;
   for (const c of state.cars) {
-    c.x = c.idx === 0 ? FIELD_W*0.22 : FIELD_W*0.78;
-    c.y = FIELD_H/2; c.vx = 0; c.vy = 0;
-    c.ang = c.idx === 0 ? 0 : Math.PI;
-    c.boost = Math.max(c.boost, 40);
+    const p = kickoffPos(c.slot, state.cars.length);
+    c.x = p.x; c.y = p.y; c.vx = 0; c.vy = 0; c.ang = p.ang; c.boost = Math.max(c.boost, 50);
   }
   state.countdown = 3;
 }
 
-/* ================= INPUT (touch joystick + boost) ================= */
+/* ================= INPUT (touch joystick + boost, keyboard fallback) ================= */
 const input = { x: 0, y: 0, boost: false };
 const joy = { active: false, id: -1, cx: 0, cy: 0, x: 0, y: 0, r: 70 };
 const boostBtn = { id: -1, pressed: false };
@@ -184,7 +214,7 @@ function handleTouch(e) {
       }
     } else if (e.type === 'touchmove') {
       if (t.identifier === joy.id) { joy.x = x; joy.y = y; }
-    } else { // end / cancel
+    } else {
       if (t.identifier === joy.id) { joy.active = false; joy.id = -1; }
       if (t.identifier === boostBtn.id) { boostBtn.id = -1; boostBtn.pressed = false; }
     }
@@ -197,10 +227,9 @@ function handleTouch(e) {
   } else { input.x = 0; input.y = 0; }
   input.boost = boostBtn.pressed;
 }
-for (const ev of ['touchstart','touchmove','touchend','touchcancel'])
+for (const ev of ['touchstart', 'touchmove', 'touchend', 'touchcancel'])
   canvas.addEventListener(ev, handleTouch, { passive: false });
 
-// keyboard fallback for desktop testing
 const keys = {};
 addEventListener('keydown', e => keys[e.key] = true);
 addEventListener('keyup', e => keys[e.key] = false);
@@ -215,25 +244,22 @@ function pollKeys() {
   if (keys[' '] !== undefined && !boostBtn.pressed) input.boost = !!keys[' '];
 }
 
-/* ================= PHYSICS ================= */
+/* ================= PHYSICS (host authoritative) ================= */
 function stepCar(c, inp, dt) {
   const mag = Math.min(1, Math.hypot(inp.x, inp.y));
   if (mag > 0.12) {
     const target = Math.atan2(inp.y, inp.x);
     let da = target - c.ang;
-    while (da > Math.PI) da -= 2*Math.PI;
-    while (da < -Math.PI) da += 2*Math.PI;
-    const maxTurn = CAR_TURN * dt * (0.5 + 0.5*mag);
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    const maxTurn = CAR_TURN * dt * (0.5 + 0.5 * mag);
     c.ang += Math.max(-maxTurn, Math.min(maxTurn, da));
     const boosting = inp.boost && c.boost > 0;
     c.boosting = boosting;
     const acc = boosting ? BOOST_ACCEL : CAR_ACCEL * mag;
     c.vx += Math.cos(c.ang) * acc * dt;
     c.vy += Math.sin(c.ang) * acc * dt;
-    if (boosting) {
-      c.boost = Math.max(0, c.boost - BOOST_DRAIN * dt);
-      spawnFlame(c);
-    }
+    if (boosting) { c.boost = Math.max(0, c.boost - BOOST_DRAIN * dt); spawnFlame(c); }
   } else {
     c.boosting = inp.boost && c.boost > 0;
     if (c.boosting) {
@@ -244,34 +270,32 @@ function stepCar(c, inp, dt) {
     }
   }
   if (!c.boosting) c.boost = Math.min(BOOST_MAX, c.boost + BOOST_REGEN * dt);
-  // friction + speed cap
   const f = Math.exp(-FRICTION * dt);
   c.vx *= f; c.vy *= f;
   const spd = Math.hypot(c.vx, c.vy);
   const cap = c.boosting ? BOOST_MAXSPD : CAR_MAXSPD;
-  if (spd > cap) { c.vx *= cap/spd; c.vy *= cap/spd; }
+  if (spd > cap) { c.vx *= cap / spd; c.vy *= cap / spd; }
   c.x += c.vx * dt; c.y += c.vy * dt;
-  // walls
   if (c.x < CAR_R) { c.x = CAR_R; c.vx = Math.abs(c.vx) * WALL_BOUNCE; }
   if (c.x > FIELD_W - CAR_R) { c.x = FIELD_W - CAR_R; c.vx = -Math.abs(c.vx) * WALL_BOUNCE; }
   if (c.y < CAR_R) { c.y = CAR_R; c.vy = Math.abs(c.vy) * WALL_BOUNCE; }
   if (c.y > FIELD_H - CAR_R) { c.y = FIELD_H - CAR_R; c.vy = -Math.abs(c.vy) * WALL_BOUNCE; }
 }
 
+// returns scoring team (0 or 1) or -1
 function stepBall(dt) {
   const b = state.ball;
   const f = Math.exp(-BALL_FRICTION * dt);
   b.vx *= f; b.vy *= f;
   b.x += b.vx * dt; b.y += b.vy * dt;
-  const gTop = (FIELD_H - GOAL_H)/2, gBot = (FIELD_H + GOAL_H)/2;
-  const inGoalMouth = b.y > gTop + BALL_R*0.3 && b.y < gBot - BALL_R*0.3;
-  // side walls (with goal openings)
+  const gTop = (FIELD_H - GOAL_H) / 2, gBot = (FIELD_H + GOAL_H) / 2;
+  const inGoalMouth = b.y > gTop + BALL_R * 0.3 && b.y < gBot - BALL_R * 0.3;
   if (b.x < BALL_R) {
-    if (inGoalMouth) { if (b.x < -BALL_R*0.6) return 1; }  // orange scores on left goal
+    if (inGoalMouth) { if (b.x < -BALL_R * 0.6) return 1; }   // into left goal -> orange scores
     else { b.x = BALL_R; b.vx = Math.abs(b.vx) * BALL_WALL_BOUNCE; }
   }
   if (b.x > FIELD_W - BALL_R) {
-    if (inGoalMouth) { if (b.x > FIELD_W + BALL_R*0.6) return 0; } // blue scores on right goal
+    if (inGoalMouth) { if (b.x > FIELD_W + BALL_R * 0.6) return 0; } // into right goal -> blue scores
     else { b.x = FIELD_W - BALL_R; b.vx = -Math.abs(b.vx) * BALL_WALL_BOUNCE; }
   }
   if (b.y < BALL_R) { b.y = BALL_R; b.vy = Math.abs(b.vy) * BALL_WALL_BOUNCE; }
@@ -284,419 +308,47 @@ function collideCarBall(c) {
   const dx = b.x - c.x, dy = b.y - c.y;
   const d = Math.hypot(dx, dy), min = CAR_R + BALL_R;
   if (d < min && d > 0.001) {
-    const nx = dx/d, ny = dy/d;
-    b.x = c.x + nx*min; b.y = c.y + ny*min;
+    const nx = dx / d, ny = dy / d;
+    b.x = c.x + nx * min; b.y = c.y + ny * min;
     const rvx = b.vx - c.vx, rvy = b.vy - c.vy;
-    const vn = rvx*nx + rvy*ny;
+    const vn = rvx * nx + rvy * ny;
     if (vn < 0) {
       const impulse = -vn * 1.55 + 60;
       b.vx += nx * impulse; b.vy += ny * impulse;
-      hitSound(Math.min(1, Math.abs(vn)/500));
-      for (let i = 0; i < 6; i++) spawnSpark(b.x - nx*BALL_R, b.y - ny*BALL_R);
+      hitSound(Math.min(1, Math.abs(vn) / 500));
+      for (let i = 0; i < 6; i++) spawnSpark(b.x - nx * BALL_R, b.y - ny * BALL_R);
     }
   }
 }
 
 function collideCars(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
-  const d = Math.hypot(dx, dy), min = CAR_R*2;
+  const d = Math.hypot(dx, dy), min = CAR_R * 2;
   if (d < min && d > 0.001) {
-    const nx = dx/d, ny = dy/d, push = (min-d)/2;
-    a.x -= nx*push; a.y -= ny*push; b.x += nx*push; b.y += ny*push;
-    const vn = (b.vx-a.vx)*nx + (b.vy-a.vy)*ny;
-    if (vn < 0) { const j = -vn*0.8; a.vx -= nx*j; a.vy -= ny*j; b.vx += nx*j; b.vy += ny*j; }
+    const nx = dx / d, ny = dy / d, push = (min - d) / 2;
+    a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push;
+    const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+    if (vn < 0) { const j = -vn * 0.8; a.vx -= nx * j; a.vy -= ny * j; b.vx += nx * j; b.vy += ny * j; }
   }
-}
-
-/* ================= BOT AI (offline mode) ================= */
-function botInput(c) {
-  const b = state.ball;
-  const ownGoalX = c.idx === 0 ? 0 : FIELD_W;
-  const enemyGoalX = FIELD_W - ownGoalX;
-  // aim point: behind the ball relative to enemy goal
-  const gdx = enemyGoalX - b.x, gdy = FIELD_H/2 - b.y;
-  const gd = Math.hypot(gdx, gdy) || 1;
-  let tx = b.x - gdx/gd * (BALL_R + CAR_R + 8);
-  let ty = b.y - gdy/gd * (BALL_R + CAR_R + 8);
-  // if ball is between bot and own goal, retreat first
-  const behindBall = Math.abs(c.x - ownGoalX) < Math.abs(b.x - ownGoalX);
-  if (!behindBall) { tx = b.x; ty = b.y; }
-  else if (Math.hypot(tx - c.x, ty - c.y) > 260 && Math.abs(b.y - c.y) > 140) {
-    ty = b.y; // swing around
-  }
-  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy) || 1;
-  return { x: dx/d, y: dy/d, boost: d > 300 && c.boost > 25 };
-}
-
-/* ================= NETWORKING (WebSocket) ================= */
-// host: latest input received from the guest
-let remoteInput = { x: 0, y: 0, boost: false };
-// guest: buffer of authoritative snapshots used for entity interpolation
-let snapBuffer = [];
-const INTERP_DELAY = 100;      // ms — render remote entities this far in the past
-const SNAP_BUFFER_MS = 1000;   // keep ~1s of snapshots around
-const NET_INTERVAL = 1 / 30;   // 30 Hz snapshot / input send rate
-let myRole = null;        // 'host' | 'guest'
-let roomCode = null;
-let pendingJoinCode = null;
-let pendingQuick = false;
-let pendingHost = false;
-let wsReconnectTimer = null;
-
-/* ---- WebSocket Network Module ---- */
-const Net = (function () {
-  function connect() {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    
-    ws = new WebSocket(WS_URL);
-
-    ws.onopen = () => {
-      wsConnected = true;
-      wsReconnecting = false;
-      console.log('WS connected');
-      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
-      
-      // If we were in a room, rejoin
-      if (myRole === 'host' && roomCode) {
-        send({ t: 'host', room: roomCode });
-      } else if (pendingHost) {
-        send({ t: 'host' });
-        pendingHost = false;
-      } else if (myRole === 'guest' && roomCode) {
-        send({ t: 'join', room: roomCode });
-      } else if (pendingJoinCode) {
-        send({ t: 'join', room: pendingJoinCode });
-        pendingJoinCode = null;
-      } else if (pendingQuick) {
-        send({ t: 'quick' });
-        pendingQuick = false;
-      }
-    };
-
-    ws.onclose = () => {
-      wsConnected = false;
-      console.log('WS disconnected');
-      if (!wsReconnecting && myRole) {
-        wsReconnecting = true;
-        wsReconnectTimer = setTimeout(connect, 1000);
-      }
-    };
-
-    ws.onerror = (e) => console.error('WS error:', e);
-
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      handleMessage(msg);
-    };
-  }
-
-  function send(obj) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(obj));
-    }
-  }
-
-  function handleMessage(msg) {
-    switch (msg.t) {
-      case 'wait':      // host waiting for guest
-        roomCode = msg.room;
-        myRole = 'host';
-        state.isHost = true; state.myIdx = 0;
-        showWaiting('host', roomCode);
-        break;
-
-      case 'start':     // match starting
-        state.isHost = msg.host;
-        state.myIdx = msg.host ? 0 : 1;
-        myRole = msg.host ? 'host' : 'guest';
-        startMatch('online');
-        break;
-
-      case 'input':     // host receives guest input
-        if (state.isHost) {
-          remoteInput = { x: msg.x || 0, y: msg.y || 0, boost: !!msg.boost };
-        }
-        break;
-
-      case 'snap':      // guest receives an authoritative snapshot
-        if (!state.isHost) {
-          const now = performance.now();
-          snapBuffer.push({ t: now, d: msg });
-          const cutoff = now - SNAP_BUFFER_MS;
-          while (snapBuffer.length > 2 && snapBuffer[0].t < cutoff) snapBuffer.shift();
-          applySnapshotMeta(msg);   // score/round/countdown/over are not interpolated
-        }
-        break;
-
-      case 'rematch':   // peer wants rematch
-        state.peerRematchReady = true;
-        if (state.isHost && state.localRematchReady) resetMatch();
-        break;
-
-      case 'reset':     // host confirms rematch
-        if (!state.isHost) {
-          state.localRematchReady = false;
-          state.peerRematchReady = false;
-          state.over = false; state.overText = '';
-          hideOverlay();
-          resetKickoff();
-          state.running = true; last = performance.now();
-        }
-        break;
-
-      case 'peer-left':
-        handleDisconnect('Opponent left');
-        break;
-
-      case 'notfound':
-        setStatus('Room not found');
-        Net.leave(); showMenuButtons();
-        break;
-
-      case 'full':
-        setStatus('Room is full');
-        Net.leave(); showMenuButtons();
-        break;
-
-      case 'queued':
-        showWaiting('quick');
-        break;
-
-      case 'error':
-        setStatus(msg.msg || 'Connection error');
-        Net.leave(); showMenuButtons();
-        break;
-    }
-  }
-
-  return {
-    host() {
-      connect();
-      myRole = 'host';
-      pendingHost = true;
-      // Server will generate code and respond with 'wait'
-    },
-
-    join(code) {
-      pendingJoinCode = code.trim().toUpperCase();
-      connect();
-      myRole = 'guest';
-    },
-
-    quick() {
-      pendingQuick = true;
-      connect();
-    },
-
-    sendSnap(obj) {
-      if (state.isHost && wsConnected) send({ t: 'snap', ...obj });
-    },
-
-    sendInput(obj) {
-      if (!state.isHost && wsConnected) send({ t: 'input', ...obj });
-    },
-
-    sendRematch() {
-      if (wsConnected) send({ t: 'rematch' });
-    },
-
-    // WS relay keeps no persistent rematch flags, so there is nothing to wipe.
-    // Present so resetMatch() can call it unconditionally without throwing.
-    clearRematch() {},
-
-    leave() {
-      myRole = null;
-      roomCode = null;
-      pendingJoinCode = null;
-      pendingQuick = false;
-      pendingHost = false;
-      remoteInput = { x: 0, y: 0, boost: false };
-      snapBuffer = [];
-      if (ws) { ws.onclose = null; ws.close(); ws = null; }
-      wsConnected = false;
-      if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
-    },
-
-    get isConnected() { return wsConnected; },
-    get myRole() { return myRole; },
-    get code() { return roomCode; }
-  };
-})();
-
-// Shown when online button pressed but not connected yet
-function onlineNotSetUp() {
-  setStatus('Connecting to server…');
-  showMenuButtons();
-}
-
-function netTick() {
-  if (state.mode !== 'online' || !Net.isConnected) return;
-  if (state.isHost) {
-    const s = state;
-    Net.sendSnap({
-      cars: s.cars.map(c => [c.x|0, c.y|0, +c.ang.toFixed(2), c.boost|0, c.boosting?1:0, +c.vx.toFixed(1), +c.vy.toFixed(1)]),
-      ball: [s.ball.x|0, s.ball.y|0, +s.ball.vx.toFixed(1), +s.ball.vy.toFixed(1)],
-      roundWins: s.roundWins,
-      roundNum: s.roundNum,
-      roundResult: s.roundResult > 0 ? s.roundResultText : 0,
-      matchOver: s.over ? s.overText : 0,
-      cd: +s.countdown.toFixed(2),
-    });
-  } else {
-    Net.sendInput({ x: +input.x.toFixed(2), y: +input.y.toFixed(2), boost: input.boost });
-  }
-}
-
-function lerp(a, b, t) { return a + (b - a) * t; }
-function lerpAngle(a, b, t) {
-  let d = b - a;
-  while (d > Math.PI) d -= 2 * Math.PI;
-  while (d < -Math.PI) d += 2 * Math.PI;
-  return a + d * t;
-}
-
-// guest: render the opponent car + ball straight from the authoritative buffer,
-// delayed by INTERP_DELAY so there are always two real snapshots to interpolate
-// between. This is what the host computed, so both screens agree — no jitter,
-// no divergence, and ball reactions match the host exactly.
-function interpolateRemote() {
-  if (!snapBuffer.length) return;
-  const renderT = performance.now() - INTERP_DELAY;
-  let older = null, newer = null;
-  for (let i = snapBuffer.length - 1; i >= 0; i--) {
-    if (snapBuffer[i].t <= renderT) { older = snapBuffer[i]; newer = snapBuffer[i + 1] || null; break; }
-  }
-  let a, b, alpha;
-  if (!older) { a = b = snapBuffer[0].d; alpha = 0; }        // buffer still filling
-  else if (!newer) { a = b = older.d; alpha = 0; }           // nothing newer yet — hold last
-  else {
-    a = older.d; b = newer.d;
-    const span = newer.t - older.t;
-    alpha = span > 0 ? Math.max(0, Math.min(1, (renderT - older.t) / span)) : 0;
-  }
-  const opp = state.myIdx === 0 ? 1 : 0;
-  const ca = a.cars[opp], cb = b.cars[opp], car = state.cars[opp];
-  car.x = lerp(ca[0], cb[0], alpha);
-  car.y = lerp(ca[1], cb[1], alpha);
-  car.ang = lerpAngle(ca[2], cb[2], alpha);
-  car.boost = cb[3]; car.boosting = !!cb[4]; car.vx = cb[5]; car.vy = cb[6];
-  const bl = state.ball;
-  bl.x = lerp(a.ball[0], b.ball[0], alpha);
-  bl.y = lerp(a.ball[1], b.ball[1], alpha);
-  bl.vx = b.ball[2]; bl.vy = b.ball[3];
-}
-
-// guest: keep the locally-predicted own car anchored to host authority so it can
-// never drift away from where the host thinks it is. Small errors are eased out
-// smoothly; large ones (kickoff resets, big desync) snap instantly.
-function reconcileOwnCar() {
-  if (!snapBuffer.length) return;
-  const a = snapBuffer[snapBuffer.length - 1].d.cars[state.myIdx];
-  const c = state.cars[state.myIdx];
-  const ex = a[0] - c.x, ey = a[1] - c.y;
-  if (ex * ex + ey * ey > 40000) {          // >200px apart: teleport/reset — hard snap
-    c.x = a[0]; c.y = a[1]; c.ang = a[2]; c.vx = a[5]; c.vy = a[6];
-  } else {
-    c.x += ex * 0.12; c.y += ey * 0.12;      // gentle pull removes accumulated drift
-  }
-  c.boost = a[3];
-}
-
-// non-interpolated match state relayed from the host (score, round, countdown, over)
-function applySnapshotMeta(d) {
-  if (d.roundWins) state.roundWins = d.roundWins;
-  if (d.roundNum) state.roundNum = d.roundNum;
-  if (typeof d.cd === 'number') state.countdown = d.cd;
-  if (d.roundResult) { state.roundResultText = d.roundResult; state.roundResult = Math.max(state.roundResult, 0.5); }
-  if (d.matchOver) {
-    if (!state.over) endMatch(d.matchOver);
-  } else if (state.over) {
-    // host reset for a rematch — follow along
-    state.over = false; state.overText = '';
-    state.localRematchReady = false; state.peerRematchReady = false;
-    hideOverlay();
-  }
-}
-
-/* ================= GAME LOOP ================= */
-let last = 0, netAcc = 0;
-function loop(ts) {
-  requestAnimationFrame(loop);
-  if (!state.running) return;
-  const dt = Math.min(0.05, (ts - last)/1000 || TICK); last = ts;
-  pollKeys();
-
-  if (!state.over) {
-    if (state.countdown > 0) {
-      state.countdown -= dt;
-    } else if (state.isHost || state.mode === 'offline') {
-      // per-round soft timer: on timeout, replay the round without awarding
-      state.roundTimeLeft -= dt;
-      if (state.roundTimeLeft <= 0) {
-        state.roundTimeLeft = ROUND_TIME;
-        resetKickoff();
-      }
-    }
-
-    const frozen = state.countdown > 0;
-    if (state.mode === 'offline') {
-      if (!frozen) {
-        stepCar(state.cars[0], input, dt);
-        stepCar(state.cars[1], botInput(state.cars[1]), dt);
-        physicsCommon(dt);
-      }
-    } else if (state.isHost) {
-      if (!frozen) {
-        stepCar(state.cars[0], input, dt);
-        stepCar(state.cars[1], remoteInput, dt);
-        physicsCommon(dt);
-      }
-    } else {
-      // guest: predict own car locally, interpolate opponent + ball from host,
-      // then reconcile the predicted car back toward host authority
-      if (!frozen) stepCar(state.cars[state.myIdx], input, dt);
-      interpolateRemote();
-      reconcileOwnCar();
-    }
-  } else if (state.mode === 'online' && !state.isHost) {
-    // guest keeps interpolating so it follows a host rematch reset smoothly
-    interpolateRemote();
-  }
-
-  // host resolves an agreed rematch
-  if (state.over && state.mode === 'online' && state.isHost &&
-      state.localRematchReady && state.peerRematchReady) {
-    resetMatch();
-  }
-
-  netAcc += dt;
-  if (netAcc >= NET_INTERVAL) { netAcc = 0; netTick(); }
-
-  state.goalFlash = Math.max(0, state.goalFlash - dt);
-  state.roundResult = Math.max(0, state.roundResult - dt);
-  updateParticles(dt);
-  render();
 }
 
 function physicsCommon(dt) {
-  collideCars(state.cars[0], state.cars[1]);
-  collideCarBall(state.cars[0]);
-  collideCarBall(state.cars[1]);
+  const cars = state.cars;
+  for (let i = 0; i < cars.length; i++)
+    for (let j = i + 1; j < cars.length; j++) collideCars(cars[i], cars[j]);
+  for (const c of cars) collideCarBall(c);
   const scorer = stepBall(dt);
   if (scorer >= 0) {
     state.roundWins[scorer]++;
     state.goalFlash = 1.6;
     state.goalText = scorer === 0 ? 'BLUE SCORES!' : 'ORANGE SCORES!';
     goalSound();
-    explode(state.ball.x, state.ball.y, scorer === 0 ? '#4da3ff' : '#ffa030');
+    explode(state.ball.x, state.ball.y, TEAM_COL[scorer].glow);
     state.roundResultText = scorer === 0 ? 'BLUE WINS ROUND!' : 'ORANGE WINS ROUND!';
     state.roundResult = 1.6;
     if (state.roundWins[scorer] >= ROUNDS_TO_WIN) {
-      // match decided
-      const won = (state.mode === 'offline') ? (scorer === 0) : (scorer === state.myIdx);
-      endMatch(won ? 'YOU WIN! 🏆' : 'YOU LOSE');
+      endMatchByTeam(scorer);
     } else {
-      // advance to next round
       state.roundNum++;
       resetKickoff();
       state.roundTimeLeft = ROUND_TIME;
@@ -704,59 +356,279 @@ function physicsCommon(dt) {
   }
 }
 
-function endMatch(text) {
-  state.over = true; state.overText = text;
-  // let the win banner show briefly, then reveal rematch/menu choices
-  setTimeout(() => {
-    if (state.over) {
-      maybeShowInterstitial();   // match-end only (not per round), frequency-capped
-      showOverlay();
-    }
-  }, 1400);
+/* ================= BOT AI (offline) ================= */
+function botInput(c) {
+  const b = state.ball;
+  const ownGoalX = c.team === 0 ? 0 : FIELD_W;
+  const enemyGoalX = FIELD_W - ownGoalX;
+  const gdx = enemyGoalX - b.x, gdy = FIELD_H / 2 - b.y;
+  const gd = Math.hypot(gdx, gdy) || 1;
+  let tx = b.x - gdx / gd * (BALL_R + CAR_R + 8);
+  let ty = b.y - gdy / gd * (BALL_R + CAR_R + 8);
+  const behindBall = Math.abs(c.x - ownGoalX) < Math.abs(b.x - ownGoalX);
+  if (!behindBall) { tx = b.x; ty = b.y; }
+  else if (Math.hypot(tx - c.x, ty - c.y) > 260 && Math.abs(b.y - c.y) > 140) { ty = b.y; }
+  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy) || 1;
+  return { x: dx / d, y: dy / d, boost: d > 300 && c.boost > 25 };
 }
 
-// host (or offline) resets everything for another match
+/* ================= NETWORKING (WebSocket relay) ================= */
+let ws = null, wsConnected = false;
+let remoteInputs = {};        // host: slot -> latest guest input
+let snapBuffer = [];          // guest: {t, d} authoritative snapshots
+let pendingAction = null;     // action to send once the socket opens
+
+const clamp01 = v => Math.max(0, Math.min(1, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
+const Net = (function () {
+  function connect() {
+    if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => { wsConnected = true; if (pendingAction) { rawSend(pendingAction); pendingAction = null; } };
+    ws.onclose = () => { wsConnected = false; };
+    ws.onerror = () => {};
+    ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch { return; } handleMessage(m); };
+  }
+  function rawSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
+
+  function handleMessage(m) {
+    switch (m.t) {
+      case 'wait':
+        state.isHost = true; state.mySlot = 0; state.submode = m.mode;
+        showWaiting('host', m.room, m.mode, m.count, m.need);
+        break;
+      case 'roster':
+        updateWaitingCount(m.count, m.need);
+        break;
+      case 'queued':
+        showWaiting('quick', null, m.mode, m.count, m.need);
+        break;
+      case 'start':
+        beginOnline(m);
+        break;
+      case 'input':
+        if (state.isHost) remoteInputs[m.slot] = { x: m.x || 0, y: m.y || 0, boost: !!m.boost };
+        break;
+      case 'snap':
+        if (!state.isHost) {
+          const now = performance.now();
+          snapBuffer.push({ t: now, d: m });
+          const cut = now - SNAP_BUFFER_MS;
+          while (snapBuffer.length > 2 && snapBuffer[0].t < cut) snapBuffer.shift();
+          applyMeta(m);
+        }
+        break;
+      case 'rematch':
+        if (state.isHost) resetMatch();
+        break;
+      case 'peer-left':
+        handleDisconnect('A player left — match ended');
+        break;
+      case 'notfound':
+        setStatus('Room not found'); Net.leave(); showMenuButtons();
+        break;
+      case 'full':
+        setStatus('Room is full'); Net.leave(); showMenuButtons();
+        break;
+    }
+  }
+
+  return {
+    host(mode) { pendingAction = { t: 'host', mode }; connect(); },
+    join(code) { pendingAction = { t: 'join', room: code }; connect(); },
+    quick(mode) { pendingAction = { t: 'quick', mode }; connect(); },
+    cancel() { rawSend({ t: 'cancel' }); },
+    sendInput(o) { if (!state.isHost && wsConnected) rawSend({ t: 'input', ...o }); },
+    sendSnap(o) { if (state.isHost && wsConnected) rawSend({ t: 'snap', ...o }); },
+    sendRematch() { if (wsConnected) rawSend({ t: 'rematch' }); },
+    leave() {
+      remoteInputs = {}; snapBuffer = []; pendingAction = null;
+      if (ws) { ws.onclose = null; ws.onmessage = null; try { ws.close(); } catch (e) {} ws = null; }
+      wsConnected = false;
+    },
+    get connected() { return wsConnected; },
+  };
+})();
+
+function beginOnline(m) {
+  state.mode = 'online'; state.submode = m.mode; state.numPlayers = m.need;
+  state.mySlot = m.slot; state.isHost = m.isHost;
+  remoteInputs = {}; snapBuffer = [];
+  buildCars(m.need);
+  startMatch();
+}
+
+/* ---- host: broadcast snapshot / guest: send input ---- */
+function netSend() {
+  if (state.mode !== 'online' || !Net.connected) return;
+  if (state.isHost) {
+    Net.sendSnap({
+      cars: state.cars.map(c => [c.x | 0, c.y | 0, +c.ang.toFixed(2), c.boost | 0, c.boosting ? 1 : 0]),
+      ball: [state.ball.x | 0, state.ball.y | 0],
+      rw: state.roundWins,
+      rn: state.roundNum,
+      rr: state.roundResult > 0 ? state.roundResultText : 0,
+      mo: state.over ? state.winTeam : -1,   // winning team while over, else -1
+      cd: +state.countdown.toFixed(2),
+    });
+  } else {
+    Net.sendInput({ x: +input.x.toFixed(2), y: +input.y.toFixed(2), boost: input.boost });
+  }
+}
+
+/* ---- guest: render every entity from the buffer, delayed for smooth interp ---- */
+function guestInterp() {
+  if (!snapBuffer.length) return;
+  const renderT = performance.now() - INTERP_DELAY;
+  let older = null, newer = null;
+  for (let i = snapBuffer.length - 1; i >= 0; i--) {
+    if (snapBuffer[i].t <= renderT) { older = snapBuffer[i]; newer = snapBuffer[i + 1] || null; break; }
+  }
+  let a, b, alpha;
+  if (!older) { a = b = snapBuffer[0].d; alpha = 0; }         // buffer still filling
+  else if (!newer) { a = b = older.d; alpha = 0; }            // nothing newer yet — hold
+  else {
+    a = older.d; b = newer.d;
+    const span = newer.t - older.t;
+    alpha = span > 0 ? clamp01((renderT - older.t) / span) : 0;
+  }
+  for (let i = 0; i < state.cars.length; i++) {
+    const ca = a.cars[i], cb = b.cars[i], c = state.cars[i];
+    if (!ca || !cb) continue;
+    c.x = lerp(ca[0], cb[0], alpha);
+    c.y = lerp(ca[1], cb[1], alpha);
+    c.ang = lerpAngle(ca[2], cb[2], alpha);
+    c.boost = cb[3]; c.boosting = !!cb[4];
+    if (c.boosting) spawnFlame(c);
+  }
+  state.ball.x = lerp(a.ball[0], b.ball[0], alpha);
+  state.ball.y = lerp(a.ball[1], b.ball[1], alpha);
+}
+
+/* ---- guest: non-interpolated match state (score/round/countdown/over) ---- */
+function applyMeta(d) {
+  if (d.rw) {
+    if (d.rw[0] > state.roundWins[0]) triggerGoalFx(0);
+    else if (d.rw[1] > state.roundWins[1]) triggerGoalFx(1);
+    state.roundWins = d.rw;
+  }
+  if (d.rn) state.roundNum = d.rn;
+  if (typeof d.cd === 'number') state.countdown = d.cd;
+  if (d.rr) { state.roundResultText = d.rr; state.roundResult = Math.max(state.roundResult, 1.2); }
+  if (typeof d.mo === 'number' && d.mo >= 0) {
+    if (!state.over) endMatchByTeam(d.mo);
+  } else if (state.over) {
+    // host reset for a rematch — follow along
+    state.over = false; state.overText = ''; state.winTeam = -1;
+    hideOverlay();
+  }
+}
+function triggerGoalFx(team) {
+  state.goalFlash = 1.6;
+  state.goalText = team === 0 ? 'BLUE SCORES!' : 'ORANGE SCORES!';
+  explode(state.ball.x, state.ball.y, TEAM_COL[team].glow);
+  goalSound();
+}
+
+/* ================= GAME LOOP ================= */
+let last = 0, netAcc = 0, simAcc = 0;
+function loop(ts) {
+  requestAnimationFrame(loop);
+  if (!state.running) { last = ts; return; }
+  const dt = Math.min(0.05, (ts - last) / 1000 || DT); last = ts;
+  pollKeys();
+
+  if (state.mode === 'offline' || state.isHost) {
+    // authoritative fixed-timestep simulation
+    simAcc += dt;
+    let steps = 0;
+    while (simAcc >= DT && steps < 5) { hostStep(DT); simAcc -= DT; steps++; }
+    if (steps >= 5) simAcc = 0;
+  } else {
+    // guest: pure interpolation of the host's world
+    guestInterp();
+  }
+
+  netAcc += dt;
+  if (netAcc >= SNAP_RATE) { netAcc = 0; netSend(); }
+
+  state.goalFlash = Math.max(0, state.goalFlash - dt);
+  state.roundResult = Math.max(0, state.roundResult - dt);
+  updateParticles(dt);
+  render();
+}
+
+function hostStep(dt) {
+  if (state.over) return;
+  if (state.countdown > 0) { state.countdown -= dt; if (state.countdown < 0) state.countdown = 0; return; }
+  state.roundTimeLeft -= dt;
+  if (state.roundTimeLeft <= 0) { state.roundTimeLeft = ROUND_TIME; resetKickoff(); return; }
+  for (const c of state.cars) {
+    let inp;
+    if (c.slot === state.mySlot) inp = input;
+    else if (state.mode === 'offline') inp = botInput(c);
+    else inp = remoteInputs[c.slot] || ZERO;
+    stepCar(c, inp, dt);
+  }
+  physicsCommon(dt);
+}
+
+function endMatch(text) {
+  state.over = true; state.overText = text;
+  setTimeout(() => { if (state.over) { maybeShowInterstitial(); showOverlay(); } }, 1400);
+}
+function endMatchByTeam(winTeam) {
+  state.winTeam = winTeam;
+  const myTeam = state.mode === 'offline' ? 0 : teamOf(state.mySlot);
+  endMatch(winTeam === myTeam ? 'YOU WIN! 🏆' : 'YOU LOSE');
+}
+
+// host (or offline) restarts the whole match
 function resetMatch() {
   state.roundWins = [0, 0]; state.roundNum = 1; state.roundTimeLeft = ROUND_TIME;
-  state.over = false; state.overText = ''; state.goalFlash = 0;
+  state.over = false; state.overText = ''; state.winTeam = -1; state.goalFlash = 0;
   state.roundResult = 0; state.roundResultText = '';
-  state.localRematchReady = false; state.peerRematchReady = false;
   state.particles.length = 0;
-  // online host: wipe the rematch flags so the next handshake starts fresh
-  if (state.mode === 'online' && state.isHost) Net.clearRematch();
   resetKickoff();
   hideOverlay();
-  state.running = true; last = performance.now();
+  state.running = true; last = performance.now(); simAcc = 0;
 }
 
 /* ================= PARTICLES & SOUND ================= */
 function spawnFlame(c) {
   if (Math.random() < 0.6) state.particles.push({
-    x: c.x - Math.cos(c.ang)*CAR_R, y: c.y - Math.sin(c.ang)*CAR_R,
-    vx: -Math.cos(c.ang)*120 + (Math.random()-.5)*60, vy: -Math.sin(c.ang)*120 + (Math.random()-.5)*60,
+    x: c.x - Math.cos(c.ang) * CAR_R, y: c.y - Math.sin(c.ang) * CAR_R,
+    vx: -Math.cos(c.ang) * 120 + (Math.random() - .5) * 60, vy: -Math.sin(c.ang) * 120 + (Math.random() - .5) * 60,
     life: 0.35, max: 0.35, col: '#ffb020', r: 7,
   });
 }
 function spawnSpark(x, y) {
-  state.particles.push({ x, y, vx: (Math.random()-.5)*300, vy: (Math.random()-.5)*300, life: .3, max: .3, col: '#ffffff', r: 3 });
+  state.particles.push({ x, y, vx: (Math.random() - .5) * 300, vy: (Math.random() - .5) * 300, life: .3, max: .3, col: '#ffffff', r: 3 });
 }
 function explode(x, y, col) {
   for (let i = 0; i < 40; i++) {
-    const a = Math.random()*Math.PI*2, s = 120 + Math.random()*380;
-    state.particles.push({ x, y, vx: Math.cos(a)*s, vy: Math.sin(a)*s, life: .9, max: .9, col, r: 5 });
+    const a = Math.random() * Math.PI * 2, s = 120 + Math.random() * 380;
+    state.particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: .9, max: .9, col, r: 5 });
   }
 }
 function updateParticles(dt) {
   const p = state.particles;
-  for (let i = p.length-1; i >= 0; i--) {
+  for (let i = p.length - 1; i >= 0; i--) {
     const q = p[i]; q.life -= dt;
     if (q.life <= 0) { p.splice(i, 1); continue; }
-    q.x += q.vx*dt; q.y += q.vy*dt;
+    q.x += q.vx * dt; q.y += q.vy * dt;
   }
 }
 
 let audioCtx = null;
-function initAudio() { if (!audioCtx) try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){} }
+function initAudio() { if (!audioCtx) try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
 function beep(freq, dur, vol, type) {
   if (!audioCtx) return;
   const o = audioCtx.createOscillator(), g = audioCtx.createGain();
@@ -766,7 +638,7 @@ function beep(freq, dur, vol, type) {
   o.connect(g); g.connect(audioCtx.destination);
   o.start(); o.stop(audioCtx.currentTime + dur);
 }
-function hitSound(v) { beep(160 + v*240, 0.09, 0.12*v + 0.03, 'triangle'); }
+function hitSound(v) { beep(160 + v * 240, 0.09, 0.12 * v + 0.03, 'triangle'); }
 function goalSound() { beep(440, .12, .15); setTimeout(() => beep(660, .12, .15), 120); setTimeout(() => beep(880, .25, .15), 240); }
 
 /* ================= RENDER ================= */
@@ -776,93 +648,78 @@ function resize() {
   canvas.width = W * DPR; canvas.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   scale = Math.min(W / FIELD_W, H / FIELD_H);
-  offX = (W - FIELD_W*scale)/2; offY = (H - FIELD_H*scale)/2;
+  offX = (W - FIELD_W * scale) / 2; offY = (H - FIELD_H * scale) / 2;
   document.body.classList.toggle('portrait', H > W);
 }
 addEventListener('resize', resize);
 resize();
-
-function fx(x) { return offX + x*scale; }
-function fy(y) { return offY + y*scale; }
 
 function render() {
   ctx.fillStyle = '#0a0e1a'; ctx.fillRect(0, 0, W, H);
   ctx.save();
   ctx.translate(offX, offY); ctx.scale(scale, scale);
 
-  // field
   const grad = ctx.createLinearGradient(0, 0, 0, FIELD_H);
   grad.addColorStop(0, '#0d3320'); grad.addColorStop(.5, '#124528'); grad.addColorStop(1, '#0d3320');
   ctx.fillStyle = grad; ctx.fillRect(0, 0, FIELD_W, FIELD_H);
-  // stripes
   ctx.fillStyle = 'rgba(255,255,255,0.03)';
-  for (let i = 0; i < 8; i += 2) ctx.fillRect(i*FIELD_W/8, 0, FIELD_W/8, FIELD_H);
-  // lines
+  for (let i = 0; i < 8; i += 2) ctx.fillRect(i * FIELD_W / 8, 0, FIELD_W / 8, FIELD_H);
   ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 4;
-  ctx.strokeRect(6, 6, FIELD_W-12, FIELD_H-12);
-  ctx.beginPath(); ctx.moveTo(FIELD_W/2, 0); ctx.lineTo(FIELD_W/2, FIELD_H); ctx.stroke();
-  ctx.beginPath(); ctx.arc(FIELD_W/2, FIELD_H/2, 130, 0, Math.PI*2); ctx.stroke();
-  // goals
-  const gTop = (FIELD_H - GOAL_H)/2;
-  ctx.fillStyle = 'rgba(77,163,255,0.25)'; ctx.fillRect(-GOAL_DEPTH+4, gTop, GOAL_DEPTH, GOAL_H);
-  ctx.fillStyle = 'rgba(255,160,48,0.25)'; ctx.fillRect(FIELD_W-4, gTop, GOAL_DEPTH, GOAL_H);
-  ctx.strokeStyle = '#4da3ff'; ctx.strokeRect(-GOAL_DEPTH+4, gTop, GOAL_DEPTH, GOAL_H);
-  ctx.strokeStyle = '#ffa030'; ctx.strokeRect(FIELD_W-4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.strokeRect(6, 6, FIELD_W - 12, FIELD_H - 12);
+  ctx.beginPath(); ctx.moveTo(FIELD_W / 2, 0); ctx.lineTo(FIELD_W / 2, FIELD_H); ctx.stroke();
+  ctx.beginPath(); ctx.arc(FIELD_W / 2, FIELD_H / 2, 130, 0, Math.PI * 2); ctx.stroke();
+  const gTop = (FIELD_H - GOAL_H) / 2;
+  ctx.fillStyle = 'rgba(77,163,255,0.25)'; ctx.fillRect(-GOAL_DEPTH + 4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.fillStyle = 'rgba(255,160,48,0.25)'; ctx.fillRect(FIELD_W - 4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.strokeStyle = '#4da3ff'; ctx.strokeRect(-GOAL_DEPTH + 4, gTop, GOAL_DEPTH, GOAL_H);
+  ctx.strokeStyle = '#ffa030'; ctx.strokeRect(FIELD_W - 4, gTop, GOAL_DEPTH, GOAL_H);
 
-  // particles
   for (const p of state.particles) {
     ctx.globalAlpha = p.life / p.max;
     ctx.fillStyle = p.col;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
   }
   ctx.globalAlpha = 1;
 
-  // ball
   const b = state.ball;
   ctx.save();
   ctx.shadowColor = '#fff'; ctx.shadowBlur = 18;
   ctx.fillStyle = '#f2f2f2';
-  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
   ctx.strokeStyle = '#999'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI*2); ctx.stroke();
-  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R*0.55, 0.4, 2.6); ctx.stroke();
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R, 0, Math.PI * 2); ctx.stroke();
+  ctx.beginPath(); ctx.arc(b.x, b.y, BALL_R * 0.55, 0.4, 2.6); ctx.stroke();
 
-  // cars
   for (const c of state.cars) drawCar(c);
 
   ctx.restore();
-
   drawHUD();
 }
 
 function drawCar(c) {
-  const col = c.idx === 0 ? '#3a8dff' : '#ff8a1e';
-  const dark = c.idx === 0 ? '#1d4f9e' : '#a34f00';
+  const t = TEAM_COL[c.team];
   ctx.save();
   ctx.translate(c.x, c.y); ctx.rotate(c.ang);
   if (c.boosting) { ctx.shadowColor = '#ffb020'; ctx.shadowBlur = 24; }
-  // body
-  ctx.fillStyle = col;
-  roundRect(-CAR_R, -CAR_R*0.72, CAR_R*2, CAR_R*1.44, 9); ctx.fill();
+  ctx.fillStyle = t.body;
+  roundRect(-CAR_R, -CAR_R * 0.72, CAR_R * 2, CAR_R * 1.44, 9); ctx.fill();
   ctx.shadowBlur = 0;
-  // cabin
-  ctx.fillStyle = dark;
-  roundRect(-CAR_R*0.35, -CAR_R*0.5, CAR_R*0.9, CAR_R, 6); ctx.fill();
-  // nose
+  ctx.fillStyle = t.dark;
+  roundRect(-CAR_R * 0.35, -CAR_R * 0.5, CAR_R * 0.9, CAR_R, 6); ctx.fill();
   ctx.fillStyle = '#fff';
-  ctx.fillRect(CAR_R*0.6, -CAR_R*0.5, CAR_R*0.3, CAR_R);
-  // wheels
+  ctx.fillRect(CAR_R * 0.6, -CAR_R * 0.5, CAR_R * 0.3, CAR_R);
   ctx.fillStyle = '#111';
-  ctx.fillRect(-CAR_R*0.8, -CAR_R*0.95, CAR_R*0.6, CAR_R*0.28);
-  ctx.fillRect(-CAR_R*0.8,  CAR_R*0.67, CAR_R*0.6, CAR_R*0.28);
-  ctx.fillRect( CAR_R*0.25, -CAR_R*0.95, CAR_R*0.6, CAR_R*0.28);
-  ctx.fillRect( CAR_R*0.25,  CAR_R*0.67, CAR_R*0.6, CAR_R*0.28);
+  ctx.fillRect(-CAR_R * 0.8, -CAR_R * 0.95, CAR_R * 0.6, CAR_R * 0.28);
+  ctx.fillRect(-CAR_R * 0.8, CAR_R * 0.67, CAR_R * 0.6, CAR_R * 0.28);
+  ctx.fillRect(CAR_R * 0.25, -CAR_R * 0.95, CAR_R * 0.6, CAR_R * 0.28);
+  ctx.fillRect(CAR_R * 0.25, CAR_R * 0.67, CAR_R * 0.6, CAR_R * 0.28);
   ctx.restore();
-  // "YOU" marker
-  const myCar = (state.mode === 'offline') ? 0 : state.myIdx;
-  if (c.idx === myCar) {
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+
+  // marker on the car you control
+  const myCar = (state.mode === 'offline') ? 0 : state.mySlot;
+  if (c.slot === myCar) {
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
     ctx.beginPath();
     ctx.moveTo(c.x, c.y - CAR_R - 26); ctx.lineTo(c.x - 9, c.y - CAR_R - 40); ctx.lineTo(c.x + 9, c.y - CAR_R - 40);
     ctx.fill();
@@ -871,122 +728,118 @@ function drawCar(c) {
 
 function roundRect(x, y, w, h, r) {
   ctx.beginPath();
-  ctx.moveTo(x+r, y);
-  ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
-  ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r);
   ctx.closePath();
 }
 
 function drawHUD() {
-  // scoreboard: round-win tally + round number
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  const cw = 260;
-  roundRectPx((W-cw)/2, 8, cw, 64, 12); ctx.fill();
+  const cw = 300;
+  roundRect((W - cw) / 2, 8, cw, 64, 12); ctx.fill();
   ctx.font = '700 34px Segoe UI, sans-serif';
-  ctx.fillStyle = '#4da3ff'; ctx.fillText(state.roundWins[0], W/2 - 72, 30);
-  ctx.fillStyle = '#ffa030'; ctx.fillText(state.roundWins[1], W/2 + 72, 30);
+  ctx.fillStyle = '#4da3ff'; ctx.fillText(state.roundWins[0], W / 2 - 82, 30);
+  ctx.fillStyle = '#ffa030'; ctx.fillText(state.roundWins[1], W / 2 + 82, 30);
   ctx.fillStyle = '#fff'; ctx.font = '700 24px Segoe UI, sans-serif';
-  ctx.fillText('–', W/2, 28);
+  ctx.fillText('–', W / 2, 28);
   ctx.fillStyle = '#cfd8ff'; ctx.font = '600 15px Segoe UI, sans-serif';
-  ctx.fillText('ROUND ' + state.roundNum + ' / 7', W/2, 56);
+  ctx.fillText('ROUND ' + state.roundNum + ' / 7   •   ' + state.submode.toUpperCase(), W / 2, 56);
 
-  // boost gauge
-  const myCar = state.cars[state.mode === 'offline' ? 0 : state.myIdx];
-  const bb = boostRect();
-  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI*2);
-  ctx.fillStyle = boostBtn.pressed ? 'rgba(255,140,0,0.55)' : 'rgba(255,140,0,0.28)'; ctx.fill();
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
-  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI*2); ctx.stroke();
-  ctx.strokeStyle = '#ffd000';
-  ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, -Math.PI/2, -Math.PI/2 + Math.PI*2*(myCar.boost/BOOST_MAX)); ctx.stroke();
-  ctx.fillStyle = '#fff'; ctx.font = '700 18px Segoe UI, sans-serif';
-  ctx.fillText('BOOST', bb.x, bb.y);
-
-  // joystick
-  if (joy.active) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(joy.cx, joy.cy, joy.r, 0, Math.PI*2); ctx.stroke();
-    const dx = joy.x-joy.cx, dy = joy.y-joy.cy, d = Math.hypot(dx,dy)||1, cl = Math.min(d, joy.r);
-    ctx.fillStyle = 'rgba(255,255,255,0.45)';
-    ctx.beginPath(); ctx.arc(joy.cx + dx/d*cl, joy.cy + dy/d*cl, 32, 0, Math.PI*2); ctx.fill();
-  } else if (state.running && !state.over) {
-    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.font = '600 15px Segoe UI, sans-serif';
-    ctx.fillText('◉ drag left side to steer', W*0.22, H - 40);
+  const myCar = state.cars[state.mode === 'offline' ? 0 : state.mySlot];
+  if (myCar) {
+    const bb = boostRect();
+    ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI * 2);
+    ctx.fillStyle = boostBtn.pressed ? 'rgba(255,140,0,0.55)' : 'rgba(255,140,0,0.28)'; ctx.fill();
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = '#ffd000';
+    ctx.beginPath(); ctx.arc(bb.x, bb.y, bb.r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (myCar.boost / BOOST_MAX)); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = '700 18px Segoe UI, sans-serif';
+    ctx.fillText('BOOST', bb.x, bb.y);
   }
 
-  // countdown / goal / round result / game over
+  if (joy.active) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(joy.cx, joy.cy, joy.r, 0, Math.PI * 2); ctx.stroke();
+    const dx = joy.x - joy.cx, dy = joy.y - joy.cy, d = Math.hypot(dx, dy) || 1, cl = Math.min(d, joy.r);
+    ctx.fillStyle = 'rgba(255,255,255,0.45)';
+    ctx.beginPath(); ctx.arc(joy.cx + dx / d * cl, joy.cy + dy / d * cl, 32, 0, Math.PI * 2); ctx.fill();
+  } else if (state.running && !state.over) {
+    ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.font = '600 15px Segoe UI, sans-serif';
+    ctx.fillText('◉ drag left side to steer', W * 0.22, H - 40);
+  }
+
   if (state.countdown > 0 && !state.over) {
     ctx.fillStyle = '#fff'; ctx.font = '800 90px Segoe UI, sans-serif';
     ctx.shadowColor = '#000'; ctx.shadowBlur = 14;
-    ctx.fillText(Math.ceil(state.countdown), W/2, H/2 - 60);
+    ctx.fillText(Math.ceil(state.countdown), W / 2, H / 2 - 60);
     ctx.shadowBlur = 0;
   }
   if (state.goalFlash > 0 && !state.over) {
     ctx.globalAlpha = Math.min(1, state.goalFlash);
     ctx.fillStyle = '#ffd000'; ctx.font = '800 64px Segoe UI, sans-serif';
     ctx.shadowColor = '#000'; ctx.shadowBlur = 12;
-    ctx.fillText(state.goalText, W/2, H*0.30);
+    ctx.fillText(state.goalText, W / 2, H * 0.30);
     ctx.shadowBlur = 0; ctx.globalAlpha = 1;
   }
   if (state.roundResult > 0 && !state.over) {
     ctx.globalAlpha = Math.min(1, state.roundResult);
     ctx.fillStyle = '#fff'; ctx.font = '800 46px Segoe UI, sans-serif';
     ctx.shadowColor = '#000'; ctx.shadowBlur = 12;
-    ctx.fillText(state.roundResultText, W/2, H*0.46);
+    ctx.fillText(state.roundResultText, W / 2, H * 0.46);
     ctx.shadowBlur = 0; ctx.globalAlpha = 1;
   }
   if (state.over) {
     ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, W, H);
     ctx.fillStyle = '#fff'; ctx.font = '800 58px Segoe UI, sans-serif';
-    ctx.fillText(state.overText, W/2, H/2 - 70);
+    ctx.fillText(state.overText, W / 2, H / 2 - 70);
     ctx.font = '600 26px Segoe UI, sans-serif'; ctx.fillStyle = '#ffd000';
-    ctx.fillText(state.roundWins[0] + '  –  ' + state.roundWins[1], W/2, H/2 - 24);
+    ctx.fillText(state.roundWins[0] + '  –  ' + state.roundWins[1], W / 2, H / 2 - 24);
   }
 }
-function roundRectPx(x, y, w, h, r) { roundRect(x, y, w, h, r); }
 
 /* ================= MENU / FLOW ================= */
 const menu = document.getElementById('menu');
 
-/* ================= ADS (native WebView bridge) ================= */
-// Native Android (WebView) should expose window.AndroidAds with:
-//   showInterstitial()   -> shows a full-screen interstitial
-//   (optional later) showRewarded(callbackName) -> for rewarded ads
-// The game calls these; if the bridge is absent the game runs normally.
-const AD_EVERY_N_MATCHES = 2;      // show at most once per this many finished matches
-const AD_MIN_GAP_MS = 60000;       // and never more often than this (ms)
-let matchesSinceAd = 0;
-let lastAdTime = 0;
+/* ---- ADS (optional native WebView bridge) ---- */
+const AD_EVERY_N_MATCHES = 2, AD_MIN_GAP_MS = 60000;
+let matchesSinceAd = 0, lastAdTime = 0;
 function maybeShowInterstitial() {
   matchesSinceAd++;
   if (matchesSinceAd < AD_EVERY_N_MATCHES) return;
   if (Date.now() - lastAdTime < AD_MIN_GAP_MS) return;
-  // Only touch the native bridge if it's actually present. If absent, leave the
-  // counters as-is so the ad shows as soon as a bridge appears (no-op otherwise).
   if (window.AndroidAds && typeof window.AndroidAds.showInterstitial === 'function') {
     try { window.AndroidAds.showInterstitial(); } catch (e) {}
-    matchesSinceAd = 0;
-    lastAdTime = Date.now();
+    matchesSinceAd = 0; lastAdTime = Date.now();
   }
 }
 
 function setStatus(s) { document.getElementById('status').textContent = s; }
 function showMenu() { menu.classList.remove('hidden'); }
-
 function showMenuButtons() {
   document.getElementById('menu-buttons').classList.remove('hidden');
   document.getElementById('waiting').classList.add('hidden');
 }
-function showWaiting(kind, code) {
+function showWaiting(kind, code, mode, count, need) {
   document.getElementById('menu-buttons').classList.add('hidden');
-  const w = document.getElementById('waiting'); w.classList.remove('hidden');
+  document.getElementById('waiting').classList.remove('hidden');
   const cd = document.getElementById('room-code-display');
-  const msg = document.getElementById('waiting-msg');
-  if (kind === 'host') { cd.textContent = code; cd.classList.remove('hidden'); msg.textContent = 'Waiting for opponent…'; }
-  else { cd.textContent = ''; cd.classList.add('hidden'); msg.textContent = 'Finding opponent…'; }
+  if (kind === 'host' && code) { cd.textContent = code; cd.classList.remove('hidden'); }
+  else { cd.textContent = ''; cd.classList.add('hidden'); }
+  updateWaitingCount(count, need, kind, mode);
   setStatus('');
+}
+function updateWaitingCount(count, need, kind, mode) {
+  const msg = document.getElementById('waiting-msg');
+  const m = mode || state.submode;
+  if (kind === 'quick' || (!document.getElementById('room-code-display').textContent)) {
+    msg.textContent = `Finding players… (${count}/${need})`;
+  } else {
+    msg.textContent = `Waiting for players… (${count}/${need}) — ${(m || '').toUpperCase()}`;
+  }
 }
 
 function showOverlay() {
@@ -996,38 +849,34 @@ function showOverlay() {
 }
 function hideOverlay() { document.getElementById('overlay').classList.add('hidden'); }
 
-// return to menu, dropping any online session cleanly
 function returnToMenu() {
   state.running = false; state.over = false;
-  state.localRematchReady = false; state.peerRematchReady = false;
   hideOverlay();
   Net.leave();
   showMenu(); showMenuButtons(); setStatus('');
 }
-
-// opponent disconnected / connection dropped mid-match
 function handleDisconnect(msg) {
   state.running = false; state.over = false;
-  state.localRematchReady = false; state.peerRematchReady = false;
   hideOverlay();
   Net.leave();
   showMenu(); showMenuButtons(); setStatus(msg);
 }
 
-function startMatch(mode) {
-  state.mode = mode;
+function startMatch() {
   state.roundWins = [0, 0]; state.roundNum = 1; state.roundTimeLeft = ROUND_TIME;
-  state.over = false; state.overText = ''; state.goalFlash = 0;
-  state.roundResult = 0; state.roundResultText = '';
-  state.localRematchReady = false; state.peerRematchReady = false;
+  state.over = false; state.overText = ''; state.winTeam = -1;
+  state.goalFlash = 0; state.roundResult = 0; state.roundResultText = '';
   state.particles.length = 0;
-  if (mode === 'offline') { state.isHost = true; state.myIdx = 0; }
   resetKickoff();
-  state.running = true; last = performance.now();
-  menu.classList.add('hidden');
-  hideOverlay();
-  setStatus('');
+  state.running = true; last = performance.now(); simAcc = 0; netAcc = 0;
+  menu.classList.add('hidden'); hideOverlay(); setStatus('');
   requestFullscreenLandscape();
+}
+function startOffline(sub) {
+  state.mode = 'offline'; state.submode = sub; state.numPlayers = sub === '2v2' ? 4 : 2;
+  state.mySlot = 0; state.isHost = true;
+  buildCars(state.numPlayers);
+  startMatch();
 }
 
 async function requestFullscreenLandscape() {
@@ -1037,30 +886,28 @@ async function requestFullscreenLandscape() {
   } catch (e) { /* not supported everywhere; rotate overlay covers it */ }
 }
 
-/* ---- menu button wiring ---- */
-document.getElementById('btn-offline').addEventListener('click', () => { initAudio(); startMatch('offline'); });
-document.getElementById('btn-quick').addEventListener('click', () => { initAudio(); Net.quick(); });
-document.getElementById('btn-host').addEventListener('click', () => { initAudio(); Net.host(); });
+/* ---- menu wiring ---- */
+document.getElementById('btn-quick').addEventListener('click', () => { initAudio(); Net.quick('1v1'); });
+document.getElementById('btn-host1').addEventListener('click', () => { initAudio(); Net.host('1v1'); });
+document.getElementById('btn-host2').addEventListener('click', () => { initAudio(); Net.host('2v2'); });
 document.getElementById('btn-join').addEventListener('click', () => {
   initAudio();
   const code = document.getElementById('room-input').value.trim().toUpperCase();
   if (!code) { setStatus('Enter a room code.'); return; }
   Net.join(code);
 });
-document.getElementById('btn-cancel').addEventListener('click', () => {
-  Net.leave();
-  showMenuButtons(); setStatus('');
-});
+document.getElementById('btn-bot1').addEventListener('click', () => { initAudio(); startOffline('1v1'); });
+document.getElementById('btn-bot2').addEventListener('click', () => { initAudio(); startOffline('2v2'); });
+document.getElementById('btn-cancel').addEventListener('click', () => { Net.cancel(); Net.leave(); showMenuButtons(); setStatus(''); });
 
 /* ---- game-over overlay wiring ---- */
 document.getElementById('btn-menu').addEventListener('click', returnToMenu);
 document.getElementById('btn-rematch').addEventListener('click', () => {
   if (state.mode === 'offline') { resetMatch(); return; }
-  state.localRematchReady = true;
-  Net.sendRematch();
+  if (state.isHost) { resetMatch(); return; }         // host restarts for everyone
+  Net.sendRematch();                                  // guest asks the host to restart
   document.getElementById('btn-rematch').disabled = true;
   document.getElementById('overlay-wait').classList.remove('hidden');
-  // host will reset once both sides are ready; guest follows the next snapshot
 });
 
 requestAnimationFrame(loop);
